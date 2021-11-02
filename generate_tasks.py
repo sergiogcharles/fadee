@@ -4,7 +4,7 @@ import torch
 
 NUM_MOTORS = 12
 
-# generate the 12 angle constraints for a task
+# Generate the 12 angle constraints for a task
 def generate_task(full_angle_of_motion, success_rate=0.8, num_expected_complete_failures=0):
     # how much limited motion there should be, e.g. success_rate=80% has 20% in expectation of failure
     mu = success_rate * full_angle_of_motion
@@ -20,9 +20,11 @@ def generate_task(full_angle_of_motion, success_rate=0.8, num_expected_complete_
             if fail:
                A.append(0)
                break 
-            angle = np.random.normal(mu, sigma)
-            if 0 < angle <= full_angle_of_motion:
-                A.append(angle)
+
+            # Sample angle upper bound limit from normal
+            angle_upper_bound = np.random.normal(mu, sigma)
+            if 0 < angle_upper_bound <= full_angle_of_motion:
+                A.append(angle_upper_bound)
                 break
 
     ranges_of_motion = [(-a , a) for a in A]
@@ -51,7 +53,7 @@ def generate_meta_test_task(full_range_of_motion, num_motors=NUM_MOTORS):
 
 if __name__ == '__main__':
     # print(generate_task(np.pi / 4))
-    meta_train_tasks_ranges = generate_meta_train_tasks(5, math.pi / 4)
+    meta_train_tasks_ranges = generate_meta_train_tasks(1000, math.pi / 4)
     meta_test_task_ranges = generate_meta_test_task(math.pi / 4)
 
     print(meta_train_tasks_ranges)
