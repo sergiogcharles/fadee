@@ -46,7 +46,8 @@ class Policy(nn.Module):
         x = self.dropout(x)
         x = F.relu(x)
         action_scores = self.affine2(x)
-        return F.softmax(action_scores, dim=1)
+        # return F.softmax(action_scores, dim=1)
+        return action_scores
 
 policy = Policy()
 optimizer = optim.Adam(policy.parameters(), lr=1e-2)
@@ -56,9 +57,7 @@ eps = np.finfo(np.float32).eps.item()
 def select_action(state):
     state = torch.from_numpy(state).float().unsqueeze(0)
     normal_params = policy(state).reshape((2, 16))
-    mu, sigma = normal_params[0, :], torch.diag(normal_params[1, :])
-    # mu = torch.ones((16,), requires_grad=True)
-    # sigma = torch.eye(16).reshape(16,-1)
+    mu, sigma = normal_params[0, :], torch.diag(torch.abs(normal_params[1, :]))
     dist = MultivariateNormal(mu, sigma)
     action = dist.sample()
     policy.saved_log_probs.append(dist.log_prob(action))

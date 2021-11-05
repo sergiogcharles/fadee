@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import torch
 
 NUM_MOTORS = 12
 
@@ -19,7 +18,7 @@ def generate_task(full_angle_of_motion, success_rate=0.8, num_expected_complete_
             fail = np.random.binomial(1, p)
             if fail:
                A.append(0)
-               break 
+               break
 
             # Sample angle upper bound limit from normal
             angle_upper_bound = np.random.normal(mu, sigma)
