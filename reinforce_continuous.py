@@ -60,13 +60,15 @@ class REINFORCE:
 
     def select_action(self, state):
         mu, sigma_sq = self.model(Variable(state))
-        mu = mu.clamp(-pi/8, pi/8)
+        # mu = mu.clamp(-pi/8, pi/8)
         sigma_sq = F.softplus(sigma_sq + 1e-5)
+        # sigma_sq = torch.exp(sigma_sq)
         # sigma_sq = sigma_sq.clamp(1e-5, 0.1)
 
         eps = torch.randn(mu.size())
         # calculate the probability
         action = (mu + sigma_sq.sqrt()*Variable(eps)).data
+        # action = pi / 4 * torch.tanh(action)
         prob = normal(action, mu, sigma_sq)
         entropy = -0.5 * ((sigma_sq + 2 * pi.expand_as(sigma_sq)).log() + 1)
 

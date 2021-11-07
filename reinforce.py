@@ -11,6 +11,8 @@ import torch.optim as optim
 from torch.distributions import Categorical
 from puppersim.pupper_gym_env import PupperGymEnv
 from torch.distributions import MultivariateNormal
+import math
+
 num_samples_per_training_step = 50
 
 parser = argparse.ArgumentParser(description='PyTorch REINFORCE example')
@@ -68,6 +70,7 @@ def select_action(state):
     sigma_sq = F.softplus(sigma_sq)
     dist = MultivariateNormal(mu, torch.diag(sigma_sq))
     action = dist.sample()
+    action = (math.pi / 4) * torch.tanh(action)
     #policy.saved_log_probs.append(dist.log_prob(action))
     return action.detach().numpy(), dist.log_prob(action)
 
