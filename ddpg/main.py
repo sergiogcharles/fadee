@@ -9,7 +9,8 @@ from puppersim.pupper_gym_env import PupperGymEnv
 import torch
 
 # env = NormalizedEnv(gym.make("Pendulum-v0"))
-env = PupperGymEnv()
+# env = PupperGymEnv()
+env = gym.make('HalfCheetah-v2') 
 
 agent = DDPGagent(env)
 noise = OUNoise(env.action_space)
@@ -17,7 +18,7 @@ batch_size = 128
 rewards = []
 avg_rewards = []
 
-for episode in range(200):
+for episode in range(1000):
     state = env.reset()
     noise.reset()
     episode_reward = 0
@@ -37,6 +38,7 @@ for episode in range(200):
         if done:
             sys.stdout.write("episode: {}, reward: {}, average _reward: {} \n".format(episode, np.round(episode_reward, decimals=2), np.mean(rewards[-10:])))
             break
+    print("episode: {}, reward: {}, average _reward: {} \n".format(episode, np.round(episode_reward, decimals=2), np.mean(rewards[-10:])))
     rewards.append(episode_reward)
     avg_rewards.append(np.mean(rewards[-10:]))
 

@@ -7,34 +7,41 @@ import matplotlib.pyplot as plt
 
 
 if __name__ == '__main__':
-    agent = Agent(alpha=0.000001, beta=0.000001, input_dims=[14], gamma=0.99,
-                layer1_size=256, layer2_size=256)
+    env = gym.make('HalfCheetah-v2') 
+    
+    agent = Agent(alpha=0.000001, beta=0.000001, input_dims=[env.observation_space.shape[0]], gamma=0.99,
+                layer1_size=256, layer2_size=256, n_outputs=env.action_space.shape[0])
 
-    env = PupperGymEnv()
+    # env = PupperGymEnv()
+    # score_history = []
 
-    times = []
-    losses = []
+    rewards = []
+    avg_rewards = []
 
-    score_history = []
-    num_episodes = 5000
-    for i in range(num_episodes):
+    num_episodes = 1000
+    for episode in range(num_episodes):
         done = False
         score = 0
         observation = env.reset()
-        loss = 0
         while not done:
             action = agent.choose_action(observation)
             observation_, reward, done, info = env.step(action)
             loss = agent.learn(observation, reward, observation_, done)
             observation = observation_
             score += reward
-        losses.append(loss.detach().numpy())
-        times.append(i)
-        score_history.append(score)
-        print(f'episode {i} score {score}')
+        # score_history.append(score)
+        print("episode: {}, reward: {}, average _reward: {} \n".format(episode, np.round(score, decimals=2), np.mean(rewards[-10:])))
+        rewards.append(score)
+        avg_rewards.append(np.mean(rewards[-10:]))
+
         T.save(agent.actor.state_dict(), 'puppersim/puppersim/actor.pt')
         T.save(agent.critic.state_dict(), 'puppersim/puppersim/critic.pt')
     
-    plt.plot(np.array(times), np.array(losses))
+
+    plt.plot(rewards)
+    plt.plot(avg_rewards)
+    plt.plot()
+    plt.xlabel('Episode')
+    plt.ylabel('Reward')
     plt.show()
     

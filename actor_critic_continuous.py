@@ -61,8 +61,8 @@ class CriticNetwork(nn.Module):
         return x
 
 class Agent(object):
-    def __init__(self, alpha, beta, input_dims, gamma=0.99, n_actions=16, 
-            layer1_size=64, layer2_size=64, n_outputs=16):
+    def __init__(self, alpha, beta, input_dims, gamma=0.99, n_actions=6, 
+            layer1_size=64, layer2_size=64, n_outputs=6):
         self.gamma = gamma
         self.log_probs = None
         self.n_outputs = n_outputs
@@ -78,8 +78,8 @@ class Agent(object):
         probs = action_probs.sample()
         self.log_probs = action_probs.log_prob(probs).to(self.actor.device)
         # bound actions between values, maybe [-pi / 4, pi / 4]
-        action = pi / 4 * T.tanh(probs)
-        # action = probs
+        # action = pi / 4 * T.tanh(probs)
+        action = probs
 
         return action.detach().numpy()
 
