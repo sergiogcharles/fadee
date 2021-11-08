@@ -17,7 +17,25 @@ from gym import wrappers
 
 from puppersim.pupper_gym_env import PupperGymEnv
 
+import os
+import puppersim
+import gin
+from pybullet_envs.minitaur.envs_v2 import env_loader
+import puppersim.data as pd
+
+
 pi = Variable(torch.FloatTensor([math.pi]))
+
+# def create_pupper_env():
+#   CONFIG_DIR = puppersim.getPupperSimPath()+"/"
+#   _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper.gin")
+# #  _NUM_STEPS = 10000
+# #  _ENV_RANDOM_SEED = 2 
+   
+#   gin.bind_parameter("scene_base.SceneBase.data_root", pd.getDataPath()+"/")
+#   gin.parse_config_file(_CONFIG_FILE)
+#   env = env_loader.load()
+#   return env
 
 def normal(x, mu, sigma_sq):
     a = (-1*(Variable(x)-mu).pow(2)/(2*sigma_sq)).exp()
@@ -61,8 +79,8 @@ class REINFORCE:
     def select_action(self, state):
         mu, sigma_sq = self.model(Variable(state))
         # mu = mu.clamp(-pi/8, pi/8)
-        sigma_sq = F.softplus(sigma_sq + 1e-5)
-        # sigma_sq = torch.exp(sigma_sq)
+        # sigma_sq = F.softplus(sigma_sq + 1e-5)
+        sigma_sq = torch.exp(sigma_sq)
         # sigma_sq = sigma_sq.clamp(1e-5, 0.1)
 
         eps = torch.randn(mu.size())
@@ -114,6 +132,8 @@ args = parser.parse_args()
 # env_name = args.env_name
 # env = gym.make(env_name)
 env = PupperGymEnv()
+# env = create_pupper_env()
+
 # if type(env.action_space) != gym.spaces.discrete.Discrete:
 #     from reinforce_continuous import REINFORCE
 #     env = NormalizedActions(gym.make(env_name))
@@ -151,8 +171,10 @@ for i_episode in range(args.num_episodes):
 
     agent.update_parameters(rewards, log_probs, entropies, args.gamma)
 
+    print("Episode: {}, reward: {}".format(i_episode, np.sum(rewards)))
+
     if i_episode%args.ckpt_freq == 0:
         torch.save(agent.model.state_dict(), 'puppersim/puppersim/model.pt')
-        print("Episode: {}, reward: {}".format(i_episode, np.sum(rewards)))
+        # print("Episode: {}, reward: {}".format(i_episode, np.sum(rewards)))
 	
 env.close()

@@ -17,9 +17,9 @@ class ActorNetwork(nn.Module):
         self.n_actions = n_actions
 
         self.fc1 = nn.Linear(*self.input_dims, self.fc1_dims)
-        self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
-        self.fc3 = nn.Linear(self.fc2_dims, self.n_actions)
-        self.fc3_ = nn.Linear(self.fc2_dims, self.n_actions)
+        # self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
+        self.fc3 = nn.Linear(*self.input_dims, self.n_actions)
+        self.fc3_ = nn.Linear(*self.input_dims, self.n_actions)
 
         self.optimizer = optim.Adam(self.parameters(), lr=self.lr)
         self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
@@ -27,10 +27,10 @@ class ActorNetwork(nn.Module):
 
     def forward(self, observation):
         state = T.tensor(observation, dtype=T.float).to(self.device)
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        mu = self.fc3(x)
-        sigma = self.fc3_(x)
+        # x = F.relu(self.fc1(state))
+        # x = F.relu(self.fc2(x))
+        mu = F.relu(self.fc3(state))
+        sigma = F.relu(self.fc3_(state))
 
         return mu, sigma
 
@@ -61,8 +61,8 @@ class CriticNetwork(nn.Module):
         return x
 
 class Agent(object):
-    def __init__(self, alpha, beta, input_dims, gamma=0.99, n_actions=6, 
-            layer1_size=64, layer2_size=64, n_outputs=6):
+    def __init__(self, alpha, beta, input_dims, gamma=0.99, n_actions=12, 
+            layer1_size=64, layer2_size=64, n_outputs=12):
         self.gamma = gamma
         self.log_probs = None
         self.n_outputs = n_outputs
@@ -78,7 +78,7 @@ class Agent(object):
         probs = action_probs.sample()
         self.log_probs = action_probs.log_prob(probs).to(self.actor.device)
         # bound actions between values, maybe [-pi / 4, pi / 4]
-        # action = pi / 4 * T.tanh(probs)
+        action = pi / 4 * T.tanh(probs)
         action = probs
 
         return action.detach().numpy()

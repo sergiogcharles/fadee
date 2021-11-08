@@ -28,6 +28,8 @@ import gin
 from pybullet_envs.minitaur.envs_v2 import env_loader
 import puppersim.data as pd
 
+import matplotlib.pyplot as plt
+
 def create_pupper_env():
   CONFIG_DIR = puppersim.getPupperSimPath()+"/"
   _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper_pmtg.gin")
@@ -351,6 +353,10 @@ class ARSLearner(object):
 
         start = time.time()
         best_mean_rewards = -1e30
+
+        rewards_list = []
+        mean_rewards_list = []
+        episodes = []
         
         for i in range(num_iter):
             
@@ -368,6 +374,12 @@ class ARSLearner(object):
                 np.savez(self.logdir + "/lin_policy_plus_latest", w)
                 
                 mean_rewards = np.mean(rewards)
+
+                # append statistics
+                rewards_list.extend(rewards.tolist())
+                mean_rewards_list.extend(mean_rewards.tolist())
+                episodes.append(i)
+
                 if (mean_rewards > best_mean_rewards):
                   best_mean_rewards = mean_rewards
                   np.savez(self.logdir + "/lin_policy_plus_best_"+str(i+1), w)
@@ -402,6 +414,12 @@ class ARSLearner(object):
             ray.get(increment_filters_ids)            
             t2 = time.time()
             print('Time to sync statistics:', t2 - t1)
+
+        plt.plot(episodes, rewards_list)
+        plt.plot(episodes, mean_rewards_list)
+        plt.xlabel('Episode')
+        plt.ylabel('Reward')
+        plt.show()
                         
         return 
 
