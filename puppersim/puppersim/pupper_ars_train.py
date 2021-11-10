@@ -310,6 +310,8 @@ class ARSLearner(object):
 
         print('Time to generate rollouts:', t2 - t1)
 
+        reward_of_rollout = rollout_rewards.max()
+
         if evaluate:
             return rollout_rewards
 
@@ -336,7 +338,7 @@ class ARSLearner(object):
         g_hat /= deltas_idx.size
         t2 = time.time()
         print('time to aggregate rollouts', t2 - t1)
-        return g_hat
+        return g_hat, reward_of_rollout
         
 
     def train_step(self):
@@ -344,27 +346,29 @@ class ARSLearner(object):
         Perform one update step of the policy weights.
         """
         
-        g_hat = self.aggregate_rollouts()                    
+        g_hat, max_reward = self.aggregate_rollouts()                    
         print("Euclidean norm of update step:", np.linalg.norm(g_hat))
         self.w_policy -= self.optimizer._compute_step(g_hat).reshape(self.w_policy.shape)
-        return
+        return max_reward
 
     def train(self, num_iter):
 
         start = time.time()
         best_mean_rewards = -1e30
 
-        rewards_list = []
-        mean_rewards_list = []
-        episodes = []
+        # rewards_list = []
+        max_rollout_rewards = []
+        # episodes = []
         
         for i in range(num_iter):
             
             t1 = time.time()
-            self.train_step()
+            max_reward = self.train_step()
             t2 = time.time()
             print('total time of one step', t2 - t1)           
             print('iter ', i,' done')
+
+            max_rollout_rewards.append(max_reward)
 
             # record statistics every 10 iterations
             if ((i + 1) % 10 == 0):
@@ -374,11 +378,6 @@ class ARSLearner(object):
                 np.savez(self.logdir + "/lin_policy_plus_latest", w)
                 
                 mean_rewards = np.mean(rewards)
-
-                # append statistics
-                rewards_list.extend(rewards.tolist())
-                mean_rewards_list.extend(mean_rewards.tolist())
-                episodes.append(i)
 
                 if (mean_rewards > best_mean_rewards):
                   best_mean_rewards = mean_rewards
@@ -415,11 +414,12 @@ class ARSLearner(object):
             t2 = time.time()
             print('Time to sync statistics:', t2 - t1)
 
-        plt.plot(episodes, rewards_list)
-        plt.plot(episodes, mean_rewards_list)
-        plt.xlabel('Episode')
+        plt.plot(max_rollout_rewards)
+        # plt.plot(episodes, mean_rewards_list)
+        plt.xlabel('Episodes')
         plt.ylabel('Reward')
         plt.show()
+        plt.savefig('pupper_ars_train.png')
                         
         return 
 

@@ -2,7 +2,7 @@
 
 Code to load a policy and generate rollout data. Adapted from https://github.com/berkeleydeeprlcourse. 
 Example usage:
-python3 pupper_ars_run_policy.py --expert_policy_file=data/lin_policy_plus_best_10.npz --json_file=data/params.json
+python3 pupper_reinforce_run_policy.py --expert_policy_file=data/lin_policy_plus_best_10.npz --json_file=data/params.json
 
 """
 import numpy as np
@@ -14,9 +14,7 @@ try:
 except:
   pass
 import json
-from arspb.policies import *
 import time
-import arspb.trained_policies as tp
 import os
 
 #temp hack to create an envs_v2 pupper env
@@ -27,7 +25,23 @@ import gin
 from pybullet_envs.minitaur.envs_v2 import env_loader
 import puppersim.data as pd
 
-import matplotlib.pyplot as plt
+# for reinforce
+
+import argparse
+from itertools import count
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from puppersim.pupper_gym_env import PupperGymEnv
+from torch.distributions import MultivariateNormal
+
+from torch.autograd import Variable
+import math
+
+from pso import PSO
+from utils import Normalizer, mkdir
 
 def create_pupper_env(args):
   CONFIG_DIR = puppersim.getPupperSimPath()+"/"
@@ -37,11 +51,42 @@ def create_pupper_env(args):
     _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper_pmtg.gin")
   gin.bind_parameter("scene_base.SceneBase.data_root", pd.getDataPath()+"/")
   gin.parse_config_file(_CONFIG_FILE)
-  gin.bind_parameter("SimulationParameters.enable_rendering", args.render)
+  gin.bind_parameter("SimulationParameters.enable_rendering", True)
   env = env_loader.load()
   
   return env
-  
+
+# hyper parameters
+class Hp():
+    def __init__(self):
+        self.main_loop_size = 100
+        self.horizon = 1000
+        self.lr = 0.02
+        self.n_directions = 8
+        self.b = 8
+        assert self.b<=self.n_directions, "b must be <= n_directions"
+        self.std = 0.03
+        self.seed = 1
+        ''' chose your favourite '''
+        #self.env_name = 'Reacher-v1'
+        #self.env_name = 'Pendulum-v0'
+        #self.env_name = 'HalfCheetahBulletEnv-v0'
+        #self.env_name = 'Hopper-v1'#'HopperBulletEnv-v0'
+        #self.env_name = 'Ant-v1'#'AntBulletEnv-v0'#
+        self.env_name = 'HalfCheetah-v1'
+        #self.env_name = 'Swimmer-v1'
+        #self.env_name = 'Humanoid-v1'
+
+def run(env, pso, normalizer, state, direction=None, side='left'):
+    normalizer.observe(state)
+    state = normalizer.normalize(state)
+    state = torch.from_numpy(state).float()
+    action = pso.evaluate(state, direction, side).numpy()
+    state, reward, done, _ = env.step(action)
+    reward = max(min(reward, 1), -1)
+    if direction is not None:
+        pso.reward(reward, direction, side)
+    return state, reward, done
   
 def main(argv):
     import argparse
@@ -59,62 +104,24 @@ def main(argv):
     else:
       args = parser.parse_args()
 
-    print('loading and building expert policy')
-    if len(args.json_file)==0:
-      args.json_file = tp.getDataPath()+"/"+ args.envname+"/params.json"    
-    with open(args.json_file) as f:
-       params = json.load(f)
-    print("params=",params)
-    if len(args.expert_policy_file)==0:
-      args.expert_policy_file=tp.getDataPath()+"/"+args.envname+"/nn_policy_plus.npz" 
-      if not os.path.exists(args.expert_policy_file):
-        args.expert_policy_file=tp.getDataPath()+"/"+args.envname+"/lin_policy_plus.npz"
-    data = np.load(args.expert_policy_file, allow_pickle=True)
-
-    print('create gym environment:', params["env_name"])
     env = create_pupper_env(args)#gym.make(params["env_name"])
 
+    hp = Hp()
+    num_inputs = env.observation_space.shape[0]
+    num_outputs = env.action_space.shape[0]
+    print(env.observation_space.shape[0])
 
-    lst = data.files
-    weights = data[lst[0]][0]
-    mu = data[lst[0]][1]
-    print("mu=",mu)
-    std = data[lst[0]][2]
-    print("std=",std)
-        
-    ob_dim = env.observation_space.shape[0]
-    ac_dim = env.action_space.shape[0]
-    ac_lb = env.action_space.low
-    ac_ub = env.action_space.high
-    
-    policy_params={'type': params["policy_type"],
-                   'ob_filter':params['filter'],
-                   'ob_dim':ob_dim,
-                   'ac_dim':ac_dim,
-                   'action_lower_bound' : ac_lb,
-                   'action_upper_bound' : ac_ub,
-    }
-    policy_params['weights'] = weights
-    policy_params['observation_filter_mean'] = mu
-    policy_params['observation_filter_std'] = std
-    if params["policy_type"]=="nn":
-      print("FullyConnectedNeuralNetworkPolicy")
-      policy_sizes_string = params['policy_network_size_list'].split(',')
-      print("policy_sizes_string=",policy_sizes_string)
-      policy_sizes_list = [int(item) for item in policy_sizes_string]
-      print("policy_sizes_list=",policy_sizes_list)
-      policy_params['policy_network_size'] = policy_sizes_list
-      policy = FullyConnectedNeuralNetworkPolicy(policy_params, update_filter=False)
-    else:
-      print("LinearPolicy2")
-      policy = LinearPolicy2(policy_params, update_filter=False)
-    policy.get_weights()
-   
+    policy = nn.Linear(num_inputs, num_outputs, bias=True)
+    policy.load_state_dict(torch.load('model.pt'))
+
+    pso = PSO(policy, hp.lr, hp.std, hp.b, hp.n_directions)
+    normalizer = Normalizer(num_inputs)
+  
     returns = []
     observations = []
     actions = []
     for i in range(args.num_rollouts):
-        print('iter', i)
+        # print('iter', i)
         obs = env.reset()
         done = False
         totalr = 0.
@@ -124,12 +131,16 @@ def main(argv):
         while not done:
             start_time_robot = current_time
             start_time_wall = time.time()
-            action = policy.act(obs)
+            # action = policy.act(obs)
+            action, _, _ = run(env, pso, normalizer, obs)
+            # agent.select_action(obs)
             #action[0:12] = 0
             observations.append(obs)
             actions.append(action)
                         
-            obs, r, done, _ = env.step(action)
+            action = action.detach().numpy()
+            # print(action[0])
+            obs, r, done, _ = env.step(action[0])
             totalr += r
             steps += 1
             current_time = env.robot.GetTimeSinceReset()
@@ -149,13 +160,6 @@ def main(argv):
     print('returns', returns)
     print('mean return', np.mean(returns))
     print('std of return', np.std(returns))
-
-    plt.plot(returns)
-    # plt.plot(episodes, mean_rewards_list)
-    plt.xlabel('Episodes')
-    plt.ylabel('Returns')
-    plt.show()
-    plt.savefig('pupper_ars_test.png')
     
 if __name__ == '__main__':
     import sys
