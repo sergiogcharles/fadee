@@ -45,10 +45,7 @@ from utils import Normalizer, mkdir
 
 def create_pupper_env(args):
   CONFIG_DIR = puppersim.getPupperSimPath()+"/"
-  if args.run_on_robot:
-    _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper_pmtg_robot.gin")
-  else:
-    _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper_pmtg.gin")
+  _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper.gin")
   gin.bind_parameter("scene_base.SceneBase.data_root", pd.getDataPath()+"/")
   gin.parse_config_file(_CONFIG_FILE)
   gin.bind_parameter("SimulationParameters.enable_rendering", True)
@@ -137,13 +134,10 @@ def main(argv):
             # action = policy.act(obs)
             action, _, _ = run(env, pso, normalizer, obs)
             # agent.select_action(obs)
-            #action[0:12] = 0
             observations.append(obs)
             actions.append(action)
                         
-            action = action.detach().numpy()
-            # print(action[0])
-            obs, r, done, _ = env.step(action[0])
+            obs, r, done, _ = env.step(action)
             totalr += r
             steps += 1
             current_time = env.robot.GetTimeSinceReset()
