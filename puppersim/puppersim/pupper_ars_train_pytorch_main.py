@@ -30,7 +30,8 @@ def create_pupper_env():
 # hyper parameters
 class Hp():
     def __init__(self):
-        self.main_loop_size = 100
+        #self.main_loop_size = 100
+        self.inner_steps = 6
         self.horizon = 1000
         self.lr = 0.02
         self.n_directions = 8
@@ -60,9 +61,9 @@ def run(env, pso, normalizer, state, direction=None, side='left'):
     return state, reward, done
 
 # training loop
-def train(env,pso, normalizer, hp):
+def inner_train(env,pso, normalizer, hp):
     fitness = []
-    for episode in range(hp.main_loop_size):
+    for episode in range(hp.inner_steps):
         # init perturbations
         pso.sample()
 
@@ -101,7 +102,45 @@ def train(env,pso, normalizer, hp):
         print('episode',episode,'reward_evaluation',reward_evaluation)
         fitness.append(reward_evaluation)
     return fitness
-
+def outer_train(envs,meta_policy, normalizer, hp, epsilon):
+    support_rewards = []
+    parameters_shift = {
+        k: torch.zeros(v.shape)
+        for k, v in meta_policy.state_dict().items()
+    }
+    
+    for env in envs:
+        local_policy = deepcopy(meta_policy)
+        pso = PSO(local_policy, hp.lr, hp.std, hp.b, hp.n_directions)
+        fitness = inner_train(env, pso, normalizer, hp)
+        
+        parameter_shift = {
+            k: v + local_policy.state_dict()[k] - meta_policy.state_dict()[k]
+            for k,v in parameter_shift.items()
+        }
+        support_rewards.append(fitness)
+    updated_state = {
+        k: v + epsilon * parameter_shift[k]/len(envs)
+        for k,v in meta_policy.state_dict().items()
+    }
+    meta_policy.load_state_dict(updated_state)
+    
+    return support_rewards
+def train(env_dataloader, meta_policy, normalizer, hp, epsilon):
+    pre_adapt_average = []
+    post_adapt_average = []
+    for envs in env_dataloader:
+        support_rewards = outer_train(envs, meta_policy, normalizer, hp, epsilon)
+        support_rewards = torch.tensor(support_rewards)
+        pre_adapt_average.append(torch.mean(support_rewards[:, 0]))
+        post_adapt_average.append(torch.mean(support_rewards[:, -1]))
+    
+        
+        
+        
+    
+        
+        
 if __name__ == '__main__':
     hp = Hp()
 
@@ -121,9 +160,9 @@ if __name__ == '__main__':
     policy.weight.data.fill_(0)
     policy.bias.data.fill_(0)
 
-    pso = PSO(policy, hp.lr, hp.std, hp.b, hp.n_directions)
+    #pso = PSO(policy, hp.lr, hp.std, hp.b, hp.n_directions)
     normalizer = Normalizer(num_inputs)
-    fitness = train(env, pso, normalizer, hp)
+    #fitness = train(env, pso, normalizer, hp)
 
     torch.save(policy.state_dict(), 'model.pt')
 
