@@ -113,6 +113,9 @@ def main(argv):
 
     policy = nn.Linear(num_inputs, num_outputs, bias=True)
     policy.load_state_dict(torch.load('model.pt'))
+#    meta_parameters = {}
+#    meta_parameters['W'] = nn.init.xavier_uniform_(torch.empty(num_inputs, num_outputs requires_grad=True,device=DEVICE))
+#    meta_parameters['b'] =  nn.init.zeros_(torch.empty(num_outputs, requires_grad=True,device=DEVICE))
 
     pso = PSO(policy, hp.lr, hp.std, hp.b, hp.n_directions)
     normalizer = Normalizer(num_inputs)
