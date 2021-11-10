@@ -18,7 +18,7 @@ import puppersim.data as pd
 
 def create_pupper_env():
   CONFIG_DIR = puppersim.getPupperSimPath()+"/"
-  _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper_pmtg.gin")
+  _CONFIG_FILE = os.path.join(CONFIG_DIR, "pupper.gin")
 #  _NUM_STEPS = 10000
 #  _ENV_RANDOM_SEED = 2 
    
@@ -31,7 +31,7 @@ def create_pupper_env():
 class Hp():
     def __init__(self):
         self.main_loop_size = 100
-        self.horizon = 1000
+        self.horizon = 100
         self.lr = 0.02
         self.n_directions = 8
         self.b = 8
