@@ -7,7 +7,7 @@
 "n_iter"	:	1000,
 "n_workers"	:	18,
 "policy_type"	:	"linear",
-"redis_address"	:	"10.128.135.90:6379",
+"redis_address"	:	"10.28.166.238:6379",
 "rollout_length"	:	150,
 "seed"	:	37,
 "shift"	:	0,
