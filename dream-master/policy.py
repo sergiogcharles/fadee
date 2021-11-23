@@ -56,3 +56,10 @@ class ConstantActionPolicy(Policy):
 
   def update(self, experience):
     pass
+
+class PEARLPolicy(Policy):
+  def act(self, state):
+    pass
+
+  def update(self, experience):
+    pass

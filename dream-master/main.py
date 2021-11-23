@@ -112,6 +112,8 @@ def get_exploration_agent(exploration_config, exploration_env):
     return policy.RandomPolicy(exploration_env.action_space)
   elif exploration_config.get("type") == "none":
     return policy.ConstantActionPolicy(grid.Action.end_episode)
+  elif exploration_config.get("type") == "task_specific":
+    return policy.PEARLAgent(exploration_env.action_space, exploration_env.observation_space)
   else:
     raise ValueError("Invalid exploration agent: {}".format(
       exploration_config.get("type")))
@@ -171,15 +173,15 @@ def main():
 
   env_class = get_env_class(config.get("environment"))
 
-  with open(os.path.join(exp_dir, "metadata.txt"), "w+") as f:
-    repo = git.Repo()
-    f.write("Commit: {}\n\n".format(repo.head.commit))
-    commit = repo.head.commit
-    diff = commit.diff(None, create_patch=True)
-    for patch in diff:
-      f.write(str(patch))
-      f.write("\n\n")
-    f.write("Split: {}\n".format(env_class.env_ids()))
+  # with open(os.path.join(exp_dir, "metadata.txt"), "w+") as f:
+  #   repo = git.Repo()
+  #   f.write("Commit: {}\n\n".format(repo.head.commit))
+  #   commit = repo.head.commit
+  #   diff = commit.diff(None, create_patch=True)
+  #   for patch in diff:
+  #     f.write(str(patch))
+  #     f.write("\n\n")
+  #   f.write("Split: {}\n".format(env_class.env_ids()))
 
 
   # Use GPU if possible

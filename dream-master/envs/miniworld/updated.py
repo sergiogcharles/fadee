@@ -228,7 +228,7 @@ class UpdatedGridEnv(grid.GridEnv):
 
     def _env_id_space(self):
         low = np.array([0])
-        high = 2 * np.array([len(self._bus_permutations)])
+        high = 8 + np.array([len(self._bus_permutations)])
         dtype = np.int
         return low, high, dtype
 
@@ -244,12 +244,12 @@ class UpdatedGridEnv(grid.GridEnv):
         super()._place_objects()
         self._agent_pos = np.array([2, 2])
 
-        if self.env_id[0] < 24
+        if self.env_id[0] < 24:
             destinations = self._bus_permutations[
                     self.env_id[0] % len(self._bus_permutations)]
             for (bus_stop, color), dest in zip(self._bus_sources, destinations):
                 self.place(grid.Bus(color, dest), bus_stop)
                 self.place(grid.Bus(color, bus_stop), dest)
-        else:
+        # else:
             
         
