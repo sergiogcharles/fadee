@@ -1,5 +1,5 @@
 {
-    "environment": "map",
+    "environment": "updated",
     "exploration_agent": {
         "batch_size": 32,
         "buffer": {

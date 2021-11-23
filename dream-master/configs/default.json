@@ -1,5 +1,5 @@
 {
-  "environment": "vanilla",
+  "environment": "updated",
   "instruction_agent": {
     "type": "learned",
     "policy": {
