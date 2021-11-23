@@ -13,6 +13,7 @@ import dqn
 from envs import grid
 from envs import cooking
 from envs import city
+from envs import updated
 import policy
 import relabel
 import rl
@@ -88,6 +89,8 @@ def get_env_class(environment_type):
     return city.MapGridEnv
   elif environment_type == "cooking":
     return cooking.CookingGridEnv
+  elif environment_type == "updated":
+    return updated.UpdatedGridEnv
   elif environment_type == "miniworld_sign":
     # Dependencies on OpenGL, so only load if absolutely necessary
     from envs.miniworld import sign
