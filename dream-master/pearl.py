@@ -13,9 +13,9 @@ import utils
 # Want: task in n transitions (contexts) from n timesteps
 # Output belief of what z is
 # We also mix in off-policy data from sampler
-class InferenceNetwork(nn.Module):
+class InferenceNetworkRNN(nn.Module):
     def __init__(self, env, hidden_dim=128, latent_dim=8):
-        super(InferenceNetwork, self).__init__()
+        super(InferenceNetworkRNN, self).__init__()
         # input size = size of 1 context (s, a, r, s') tuple
         context_dim = 2 * env.observation_space.shape[0] + env.action_space.shape[0] + 1
 
@@ -32,6 +32,36 @@ class InferenceNetwork(nn.Module):
         z = self.proj(output)
 
         return z
+
+class InferenceNetwork(nn.Module):
+  def __init__(self, env, hidden_dim=128, latent_dim=8):
+    super(InferenceNetwork, self).__init__():
+
+    context_dim = 2 * env.observation_space.shape[0] + env.action_space.shape[0] + 1
+    self.linear1 = nn.Linear(context_dim, hidden_dim)
+    self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+
+    self.mu_head = nn.Linear(hidden_dim, latent_dim)
+    self.sigma_head = nn.Linear(hidden_dim, latent_dim)
+
+  def forward(self, context):
+    x = self.linear1(context)
+    x = self.linear2(x)
+
+    mu = self.mu_head(x)
+    sigma = F.relu(self.sigma_head(x))
+
+    return mu, sigma
+
+  def sample_latent(self, context):
+    mu, sigma = self.forward(context)
+    # action_probs = torch.distributions.Normal(mu, sigma)
+    q_posterior = T.distributions.MultivariateNormal(mu, T.diag(sigma))
+    # probs = action_probs.sample(sample_shape=T.Size([self.n_outputs]))
+    z = q_posterior.sample()
+
+    return z
+
 
 class DQNAgent(object):
   @classmethod
