@@ -232,6 +232,8 @@ def main():
   instruction_steps = 0
   for step in tqdm.tqdm(range(1000000)):
     exploration_env = create_env(step)
+
+    # TODO: Modify to run only up to certain num timesteps
     exploration_episode, _ = run_episode(
         # Exploration episode gets ignored
         env_class.instruction_wrapper()(

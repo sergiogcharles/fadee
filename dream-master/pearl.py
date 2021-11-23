@@ -4,30 +4,34 @@ import torch
 from torch import nn
 from torch import optim
 from torch.nn import utils as torch_utils
+import torch.nn.functional as F
 import schedule
 import replay
 import embed
 import utils
 
-class PEARLAgent(object):
-    def __init__(self, ):
-        pass
+# Want: task in n transitions (contexts) from n timesteps
+# Output belief of what z is
+# We also mix in off-policy data from sampler
+class InferenceNetwork(nn.Module):
+    def __init__(self, env, hidden_dim=128, latent_dim=8):
+        super(InferenceNetwork, self).__init__()
+        # input size = size of 1 context (s, a, r, s') tuple
+        context_dim = 2 * env.observation_space.shape[0] + env.action_space.shape[0] + 1
 
-###############################################################################################################
+        self.rnn = nn.RNN(input_size=context_dim, hidden_size=hidden_dim, num_layers=3)
+        self.proj = nn.Linear(hidden_dim, latent_dim)
 
+    def forward(self, contexts):
+        # contexts shape = (L, N, H_in) = (n, batch_size, size(concatenated(s, a, r, s'))) for n context in contexts
+        # H_in = 2 * state.shape[0] + action.shape[0] + 1
+        # output = (n, batch_size, H_out)
 
-# Adapted from https://github.com/ezliu/hrl
-import collections
-import numpy as np
-import torch
-from torch import nn
-from torch import optim
-from torch.nn import utils as torch_utils
-import schedule
-import replay
-import embed
-import utils
+        output, hn = self.rnn(contexts)
+        output = F.relu(output)
+        z = self.proj(output)
 
+        return z
 
 class DQNAgent(object):
   @classmethod
@@ -68,7 +72,7 @@ class DQNAgent(object):
     self._losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
 
-  def update(self, experience):
+  def update(self, experience, timestep):
     """Updates agent on this experience.
 
     Args:
@@ -76,8 +80,14 @@ class DQNAgent(object):
     """
     self._replay_buffer.add(experience)
 
+    # If timestep % update_inference_freq
+    if timestep % self._update_inference_freq == 0:
+        # Sample n contexts (transitions) from sample
+        contexts = self._replay_buffer.context_sampler(self._update_inference_freq)
+
     if len(self._replay_buffer) >= self._min_buffer_size:
       if self._updates % self._update_freq == 0:
+        # This is like batch b^i in 
         experiences = self._replay_buffer.sample(self._batch_size)
 
         self._optimizer.zero_grad()
@@ -456,9 +466,9 @@ class DQN(nn.Module):
     """
     super(DQN, self).__init__()
     self._state_embedder = state_embedder
-    self._q_values = nn.Linear(self._state_embedder.embed_dim, num_actions)
+    self._q_values = nn.Linear(self._state_embedder.embed_dim + 8, num_actions)
 
-  def forward(self, states, hidden_states=None):
+  def forward(self, states, task_encoding, hidden_states=None):
     """Returns Q-values for each of the states.
 
     Args:
@@ -471,21 +481,28 @@ class DQN(nn.Module):
       hidden_state (object)
     """
     state_embed, hidden_state = self._state_embedder(states, hidden_states)
+    # concatenate state and task encoding
+    print(state_embed.shape)
+    breakpoint()
+    state_embed = torch.cat((state_embed, task_encoding))
     return self._q_values(state_embed), hidden_state
 
 
 class DuelingNetwork(DQN):
   """Implements the following Q-network:
 
-    Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
+    # Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
+    Q(s, a, z) = V(s, z) + A(s, a, z) - avg_a' A(s, a', z)
   """
   def __init__(self, num_actions, state_embedder):
     super(DuelingNetwork, self).__init__(num_actions, state_embedder)
-    self._V = nn.Linear(self._state_embedder.embed_dim, 1)
-    self._A = nn.Linear(self._state_embedder.embed_dim, num_actions)
+    self._V = nn.Linear(self._state_embedder.embed_dim + 8, 1)
+    self._A = nn.Linear(self._state_embedder.embed_dim + 8, num_actions)
 
-  def forward(self, states, hidden_states=None):
+  def forward(self, states, task_encoding, hidden_states=None):
     state_embedding, hidden_state = self._state_embedder(states, hidden_states)
+    # concatenate state with task encoding
+    state_embedding = torch.cat((state_embedding, task_encoding))
     V = self._V(state_embedding)
     advantage = self._A(state_embedding)
     mean_advantage = torch.mean(advantage)

@@ -1,4 +1,3 @@
-# Adapted from https://github.com/ezliu/hrl
 import collections
 import numpy as np
 import torch
@@ -9,7 +8,6 @@ import schedule
 import replay
 import embed
 import utils
-
 
 class DQNAgent(object):
   @classmethod
@@ -78,17 +76,18 @@ class DQNAgent(object):
 
     self._updates += 1
 
-  def act(self, state, prev_hidden_state=None, test=False):
+  def act(self, state, task_encoding, prev_hidden_state=None, test=False):
     """Given the current state, returns an action.
 
     Args:
       state (State)
+      task_encoding (Latent z)
 
     Returns:
       action (int)
       hidden_state (object)
     """
-    return self._dqn.act(state, prev_hidden_state=prev_hidden_state, test=test)
+    return self._dqn.act(state, task_encoding, prev_hidden_state=prev_hidden_state, test=test)
 
   @property
   def stats(self):
@@ -200,7 +199,7 @@ class DQNPolicy(nn.Module):
     self._min_q = collections.deque(maxlen=1000)
     self._losses = collections.defaultdict(lambda: collections.deque(maxlen=1000))
 
-  def act(self, state, prev_hidden_state=None, test=False):
+  def act(self, state, task_encoding, prev_hidden_state=None, test=False):
     """
     Args:
       state (State)
@@ -215,8 +214,7 @@ class DQNPolicy(nn.Module):
       hidden_state (None)
     """
     del prev_hidden_state
-
-    q_values, hidden_state = self._Q([state], None)
+    q_values, hidden_state = self._Q([state], task_encoding, None)
     if test:
       epsilon = self._test_epsilon
     else:
@@ -401,7 +399,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     loss = loss.sum() / mask.sum()  # masked mean
     return loss + sum(aux_losses.values())
 
-  def act(self, state, prev_hidden_state=None, test=False):
+  def act(self, state, task_encoding, prev_hidden_state=None, test=False):
     """
     Args:
       state (State)
@@ -415,7 +413,7 @@ class RecurrentDQNPolicy(DQNPolicy):
       int: action
       hidden_state (None)
     """
-    q_values, hidden_state = self._Q([[state]], prev_hidden_state)
+    q_values, hidden_state = self._Q([[state]], task_encoding, prev_hidden_state)
     if test:
       epsilon = self._test_epsilon
     else:
@@ -435,9 +433,9 @@ class DQN(nn.Module):
     """
     super(DQN, self).__init__()
     self._state_embedder = state_embedder
-    self._q_values = nn.Linear(self._state_embedder.embed_dim, num_actions)
+    self._q_values = nn.Linear(self._state_embedder.embed_dim + 8, num_actions)
 
-  def forward(self, states, hidden_states=None):
+  def forward(self, states, task_encoding, hidden_states=None):
     """Returns Q-values for each of the states.
 
     Args:
@@ -450,21 +448,28 @@ class DQN(nn.Module):
       hidden_state (object)
     """
     state_embed, hidden_state = self._state_embedder(states, hidden_states)
+    # concatenate state and task encoding
+    print(state_embed.shape)
+    breakpoint()
+    state_embed = torch.cat((state_embed, task_encoding))
     return self._q_values(state_embed), hidden_state
 
 
 class DuelingNetwork(DQN):
   """Implements the following Q-network:
 
-    Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
+    # Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
+    Q(s, a, z) = V(s, z) + A(s, a, z) - avg_a' A(s, a', z)
   """
   def __init__(self, num_actions, state_embedder):
     super(DuelingNetwork, self).__init__(num_actions, state_embedder)
-    self._V = nn.Linear(self._state_embedder.embed_dim, 1)
-    self._A = nn.Linear(self._state_embedder.embed_dim, num_actions)
+    self._V = nn.Linear(self._state_embedder.embed_dim + 8, 1)
+    self._A = nn.Linear(self._state_embedder.embed_dim + 8, num_actions)
 
-  def forward(self, states, hidden_states=None):
+  def forward(self, states, task_encoding, hidden_states=None):
     state_embedding, hidden_state = self._state_embedder(states, hidden_states)
+    # concatenate state with task encoding
+    state_embedding = torch.cat((state_embedding, task_encoding))
     V = self._V(state_embedding)
     advantage = self._A(state_embedding)
     mean_advantage = torch.mean(advantage)
