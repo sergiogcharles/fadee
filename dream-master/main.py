@@ -90,7 +90,7 @@ def get_env_class(environment_type):
   elif environment_type == "cooking":
     return cooking.CookingGridEnv
   elif environment_type == "updated":
-    return updated.UpdatedGridEnv
+    return updated.UpdatedTwoGridEnv
   elif environment_type == "miniworld_sign":
     # Dependencies on OpenGL, so only load if absolutely necessary
     from envs.miniworld import sign
