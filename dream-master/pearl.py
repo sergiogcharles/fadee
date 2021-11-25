@@ -199,48 +199,48 @@ class DQNAgent(object):
     # TODO: NEED TO ENSURE THIS MAKES SENSE
 
     if len(self._replay_buffer) >= self._min_buffer_size:
-        if self._updates % self._update_freq == 0:
-          # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
-          context = None
-          if len(self._replay_buffer._storage) < self.context_batch_size:
-            context = self._replay_buffer.context_sample(len(self._replay_buffer._storage))
-          else:
-            context = self._replay_buffer.context_sample(self.context_batch_size)
+      if self._updates % self._update_freq == 0:
+        # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
+        context = None
+        if len(self._replay_buffer._storage) < self.context_batch_size:
+          context = self._replay_buffer.context_sample(len(self._replay_buffer._storage))
+        else:
+          context = self._replay_buffer.context_sample(self.context_batch_size)
 
-          self._optimizer_inference.zero_grad()
+        self._optimizer_inference.zero_grad()
 
-          # Compute KL-divergence loss
-          prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
-          # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
-          posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
+        # Compute KL-divergence loss
+        prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
+        # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
+        posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
-          # Sample z from posterior
-          z = self.infer_posterior(context)
+        # Sample z from posterior
+        z = self.infer_posterior(context)
 
-          # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
-          # kl_loss = torch.sum(torch.stack(kl_losses))
-          kl_loss = torch.distributions.kl.kl_divergence(prior, posterior)
-          kl_loss.backward()
+        # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
+        # kl_loss = torch.sum(torch.stack(kl_losses))
+        kl_loss = torch.distributions.kl.kl_divergence(prior, posterior)
+        kl_loss.backward()
 
-          self._kl_losses.append(kl_loss.item())
+        self._kl_losses.append(kl_loss.item())
 
-          self._optimizer_inference.step()
+        self._optimizer_inference.step()
 
-          ##########################################################################
+        ##########################################################################
 
-          # This is like batch b^i in 
-          experiences = self._replay_buffer.sample(self._batch_size)
+        # This is like batch b^i in 
+        experiences = self._replay_buffer.sample(self._batch_size)
 
-          self._optimizer_dqn.zero_grad()
-          loss = self._dqn.loss(experiences, np.ones(self._batch_size))
-          loss.backward()
-          self._losses.append(loss.item())
+        self._optimizer_dqn.zero_grad()
+        loss = self._dqn.loss(experiences, np.ones(self._batch_size))
+        loss.backward()
+        self._losses.append(loss.item())
 
-          # clip according to the max allowed grad norm
-          grad_norm = torch_utils.clip_grad_norm_(
-              self._dqn.parameters(), self._max_grad_norm, norm_type=2)
-          self._grad_norms.append(grad_norm)
-          self._optimizer_dqn.step()
+        # clip according to the max allowed grad norm
+        grad_norm = torch_utils.clip_grad_norm_(
+            self._dqn.parameters(), self._max_grad_norm, norm_type=2)
+        self._grad_norms.append(grad_norm)
+        self._optimizer_dqn.step()
 
       if self._updates % self._sync_freq == 0:
         self._dqn.sync_target()

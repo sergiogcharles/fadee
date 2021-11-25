@@ -9,7 +9,7 @@ import torch
 import tqdm
 
 import config as cfg
-import dqn
+import pearl as dqn
 from envs import grid
 from envs import cooking
 from envs import city
