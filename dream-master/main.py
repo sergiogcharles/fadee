@@ -253,11 +253,12 @@ def main():
     # z = exploration_agent.infer_posterior()
 
     # TODO: Modify to run only up to certain num timesteps
+    print(type(exploration_agent))
     exploration_episode, _ = run_episode(
         # Exploration epis ode gets ignored
         env_class.instruction_wrapper()(
             exploration_env, [], seed=max(0, step - 1)),
-        exploration_agent, exploration=True)
+        exploration_agent._dqn, exploration_agent, exploration=True)
 
     # Needed to keep references to the trajectory and index for reward labeling
     for index, exp in enumerate(exploration_episode):
