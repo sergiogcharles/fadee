@@ -131,7 +131,10 @@ class DQNAgent(object):
     self._inference_net = inference_net
     self._kl_losses = collections.deque(maxlen=100)
     self.z = None
+    self.context_mu = None
+    self.context_sigma_squared = None
     self._latent_dim = latent_dim
+    self.context_batch_size = 10
 
   def product_of_guassians(mus, sigmas_squared):
     # Compute mu, sigma_squared for product of Gaussians 
@@ -142,77 +145,109 @@ class DQNAgent(object):
     return mu, sigma_squared
 
   def infer_posterior(self, context):
-    # Compute q(z|c) from context then sample z from q(z|c)
-    mus, sigmas_squared = self._inference_net(context)
-    # #transitions in context x latent_dim
-    mu, sigma_squared = product_of_guassians(mus, sigmas_squared)
-    dist = torch.distributions.MultivariateNormal(mu, sigma_squared)
+    if context:
+      # Compute q(z|c) from context then sample z from q(z|c)
+      mus, sigmas_squared = self._inference_net(context)
+      # #transitions in context x latent_dim
 
-    self.z = dist.sample()
+      # should return latent_dim-dimensional mu, sigma_squared
+      self.context_mu, self.context_sigma_squared = product_of_guassians(mus, sigmas_squared)
+      dist = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
-    return z
+      self.z = dist.sample()
+    else:
+      # Default to prior if no context
+      dist = torch.distributions.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
+      self.z = dist.sample()
+    return self.z
 
   def detach_z(self):
     # removes z from computational graph so we don't backprop through
     self.z = self.z.detach()
 
-  def update(self, experience, timestep):
+  def update(self, experience):
     """Updates agent on this experience.
 
     Args:
       experience (Experience): experience to update on.
     """
-    self._replay_buffer.add(experience)
+    # self._replay_buffer.add(experience)
 
     # If timestep % update_inference_freq
-    if timestep % self._update_inference_freq == 0:
-      # Sample n recent transitions (i.e. context) from replay buffer
+    # if timestep % self._update_inference_freq == 0:
+    #   # Sample n recent transitions (i.e. context) from replay buffer
 
-      # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
-      context = self._replay_buffer.context_sample(self._update_inference_freq)
+    #   # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
+    #   context = self._replay_buffer.context_sample(self._update_inference_freq)
 
-      prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
-      posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in context_stats]
+    #   self._optimizer_inference.zero_grad()
 
-      kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
+    #   # Compute KL-divergence loss
+    #   prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
+    #   # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
+    #   posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
-      kl_loss.backward()
-      self._kl_losses.append(kl_loss.item())
+    #   # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
+    #   # kl_loss = torch.sum(torch.stack(kl_losses))
+    #   kl_loss = torch.distributions.kl.kl_divergence(prior, posterior)
 
-      self._optimizer_inference.step()
+    #   kl_loss.backward()
+    #   self._kl_losses.append(kl_loss.item())
 
-      F(z|mu) = 
+    #   self._optimizer_inference.step()
 
-      get hidden states h_1, ..., h_H
-      k means k = num of problem ids 
-      cluster to get mu 
-
-
-
-
+    # TODO: NEED TO ENSURE THIS MAKES SENSE
 
     if len(self._replay_buffer) >= self._min_buffer_size:
-      if self._updates % self._update_freq == 0:
-        # This is like batch b^i in 
-        experiences = self._replay_buffer.sample(self._batch_size)
+        if self._updates % self._update_freq == 0:
+          # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
+          context = None
+          if len(self._replay_buffer._storage) < self.context_batch_size:
+            context = self._replay_buffer.context_sample(len(self._replay_buffer._storage))
+          else:
+            context = self._replay_buffer.context_sample(self.context_batch_size)
 
-        self._optimizer_dqn.zero_grad()
-        loss = self._dqn.loss(experiences, np.ones(self._batch_size))
-        loss.backward()
-        self._losses.append(loss.item())
+          self._optimizer_inference.zero_grad()
 
-        # clip according to the max allowed grad norm
-        grad_norm = torch_utils.clip_grad_norm_(
-            self._dqn.parameters(), self._max_grad_norm, norm_type=2)
-        self._grad_norms.append(grad_norm)
-        self._optimizer_dqn.step()
+          # Compute KL-divergence loss
+          prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
+          # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
+          posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
+
+          # Sample z from posterior
+          z = self.infer_posterior(context)
+
+          # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
+          # kl_loss = torch.sum(torch.stack(kl_losses))
+          kl_loss = torch.distributions.kl.kl_divergence(prior, posterior)
+          kl_loss.backward()
+
+          self._kl_losses.append(kl_loss.item())
+
+          self._optimizer_inference.step()
+
+          ##########################################################################
+
+          # This is like batch b^i in 
+          experiences = self._replay_buffer.sample(self._batch_size)
+
+          self._optimizer_dqn.zero_grad()
+          loss = self._dqn.loss(experiences, np.ones(self._batch_size))
+          loss.backward()
+          self._losses.append(loss.item())
+
+          # clip according to the max allowed grad norm
+          grad_norm = torch_utils.clip_grad_norm_(
+              self._dqn.parameters(), self._max_grad_norm, norm_type=2)
+          self._grad_norms.append(grad_norm)
+          self._optimizer_dqn.step()
 
       if self._updates % self._sync_freq == 0:
         self._dqn.sync_target()
 
     self._updates += 1
 
-  def act(self, state, prev_hidden_state=None, test=False):
+  def act(self, state, z, prev_hidden_state=None, test=False):
     """Given the current state, returns an action.
 
     Args:
@@ -222,7 +257,7 @@ class DQNAgent(object):
       action (int)
       hidden_state (object)
     """
-    return self._dqn.act(state, prev_hidden_state=prev_hidden_state, test=test)
+    return self._dqn.act(state, z, prev_hidden_state=prev_hidden_state, test=test)
 
   @property
   def stats(self):
@@ -336,7 +371,7 @@ class DQNPolicy(nn.Module):
     self._min_q = collections.deque(maxlen=1000)
     self._losses = collections.defaultdict(lambda: collections.deque(maxlen=1000))
 
-  def act(self, state, prev_hidden_state=None, test=False):
+  def act(self, state, z, prev_hidden_state=None, test=False):
     """
     Args:
       state (State)
@@ -352,7 +387,7 @@ class DQNPolicy(nn.Module):
     """
     del prev_hidden_state
 
-    q_values, hidden_state = self._Q([state], None)
+    q_values, hidden_state = self._Q([state], z, None)
     if test:
       epsilon = self._test_epsilon
     else:
@@ -361,12 +396,12 @@ class DQNPolicy(nn.Module):
     self._min_q.append(torch.min(q_values).item())
     return epsilon_greedy(q_values, epsilon)[0], None
 
-  def loss(self, experiences, weights):
+  def loss(self, experiences, weights, z):
     """Updates parameters from a batch of experiences
 
     Minimizing the loss:
 
-      (target - Q(s, a))^2
+      (target - Q(s, a, z))^2
 
       target = r if done
            r + \gamma * max_a' Q(s', a')
@@ -390,7 +425,7 @@ class DQNPolicy(nn.Module):
     weights = torch.tensor(weights).float()
 
     # TODO(evzliu): Could more gracefully incorporate aux_losses
-    current_state_q_values, aux_losses = self._Q(states, None)
+    current_state_q_values, aux_losses = self._Q(states, z, None)
     if isinstance(aux_losses, dict):
       for name, loss in aux_losses.items():
         self._losses[name].append(loss.detach().cpu().data.numpy())
@@ -398,7 +433,7 @@ class DQNPolicy(nn.Module):
         1, actions.unsqueeze(1))
 
     # DDQN
-    best_actions = torch.max(self._Q(next_states, None)[0], 1)[1].unsqueeze(1)
+    best_actions = torch.max(self._Q(next_states, z, None)[0], 1)[1].unsqueeze(1)
     next_state_q_values = self._target_Q(next_states, None)[0].gather(
         1, best_actions).squeeze(1)
     targets = rewards + self._gamma * (
@@ -504,7 +539,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     weights = torch.tensor(weights).float()
 
     # (batch_size, seq_len + 1, actions)
-    q_values, _ = self._Q(states, hidden_states)
+    q_values, _ = self._Q(states, z, hidden_states)
     current_q_values = q_values[:, :-1, :]
     current_q_values = current_q_values.reshape(batch_size * seq_len, -1)
     # (batch_size * seq_len, 1)
@@ -537,7 +572,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     loss = loss.sum() / mask.sum()  # masked mean
     return loss + sum(aux_losses.values())
 
-  def act(self, state, prev_hidden_state=None, test=False):
+  def act(self, state, z, prev_hidden_state=None, test=False):
     """
     Args:
       state (State)
@@ -551,7 +586,7 @@ class RecurrentDQNPolicy(DQNPolicy):
       int: action
       hidden_state (None)
     """
-    q_values, hidden_state = self._Q([[state]], prev_hidden_state)
+    q_values, hidden_state = self._Q([[state]], z, prev_hidden_state)
     if test:
       epsilon = self._test_epsilon
     else:
@@ -573,7 +608,7 @@ class DQN(nn.Module):
     self._state_embedder = state_embedder
     self._q_values = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
 
-  def forward(self, states, hidden_states=None):
+  def forward(self, states, z, hidden_states=None):
     """Returns Q-values for each of the states.
 
     Args:
@@ -590,12 +625,9 @@ class DQN(nn.Module):
     # concatenate state and task encoding
     print(state_embed.shape)
 
-    # sample context
-    context = 
+    # z = self.infer_posterior(context)
 
-    z = self.infer_posterior(context)
-
-    state_embed = torch.cat((state_embed, z))
+    state_embed = torch.cat((state_embed, z.detach()))
     return self._q_values(state_embed), hidden_state
 
 
@@ -605,24 +637,21 @@ class DuelingNetwork(DQN):
     # Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
     Q(s, a, z) = V(s, z) + A(s, a, z) - avg_a' A(s, a', z)
   """
-  def __init__(self, num_actions, state_embedder):
+  def __init__(self, num_actions, state_embedder, latent_dim=8):
     super(DuelingNetwork, self).__init__(num_actions, state_embedder)
-    self._V = nn.Linear(self._state_embedder.embed_dim + 8, 1)
-    self._A = nn.Linear(self._state_embedder.embed_dim + 8, num_actions)
+    self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
+    self._A = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
 
-  def forward(self, states, hidden_states=None):
+  def forward(self, states, z, hidden_states=None):
     state_embedding, hidden_state = self._state_embedder(states, hidden_states)
 
     # concatenate state and task encoding
     print(state_embed.shape)
 
-    # sample context
-    context = 
-
-    z = self.infer_posterior(context)
+    # z = self.infer_posterior(context)
 
     # concatenate state with task encoding
-    state_embedding = torch.cat((state_embedding, z))
+    state_embedding = torch.cat((state_embedding, z.detach()))
     V = self._V(state_embedding)
     advantage = self._A(state_embedding)
     mean_advantage = torch.mean(advantage)

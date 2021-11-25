@@ -49,6 +49,13 @@ class ReplayBuffer(object):
     indices = np.random.randint(len(self._storage), size=batch_size)
     return [self._storage[i] for i in indices]
 
+  def sample_context(self, num_context, num_recent=20):
+    indices = None
+    if num_recent < len(self._storage):
+      indices = np.random.randint(len(self._storage) - num_recent, len(self._storage), size=num_context)
+    else:
+      indices = np.random.randint(len(self._storage), size=num_context)
+    return [self._storage[i] for i in indices]
 
 class SequentialReplayBuffer(ReplayBuffer):
   """Replay buffer that samples length N contiguous sequences.
