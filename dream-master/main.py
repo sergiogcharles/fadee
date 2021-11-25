@@ -20,7 +20,7 @@ import rl
 import utils
 
 
-def run_episode(env, policy, agent, experience_observers=None, test=False, exploration=False):
+def run_episode(env, policy, agent=None, experience_observers=None, test=False):
   """Runs a single episode on the environment following the policy.
 
   Args:
@@ -58,10 +58,16 @@ def run_episode(env, policy, agent, experience_observers=None, test=False, explo
   # Then rollout for N timesteps
   while True:
     # Sample z (initially, prior)
-    z = agent.infer_posterior(context)
 
-    action, next_hidden_state = policy.act(
-        state, z, hidden_state, test=test)
+    # If agent exists, we are doing exploration
+    if agent:
+      z = agent.infer_posterior(context)
+
+      action, next_hidden_state = policy.act(
+          state, z, hidden_state, test=test)
+    else:
+      action, next_hidden_state = policy.act(
+          state, None, hidden_state, test=test)
     next_state, reward, done, info = env.step(action)
     timestep += 1
     renders.append(
@@ -76,16 +82,16 @@ def run_episode(env, policy, agent, experience_observers=None, test=False, explo
     state = next_state
     hidden_state = next_hidden_state
     if done:
-      if exploration:
+      if agent:
         # Only do this if it's the exploration episode
         for index, exp in enumerate(episode):
           # Add experience to replay buffer
           agent._replay_buffer.add(relabel.TrajectoryExperience(exp, episode, index))
 
         # Update context (as in 1st part of PEARL algo)
-        context = agent._replay_buffer.context_sample(len(agent._replay_buffer._storage))
+        context = agent._replay_buffer.sample_context(len(agent._replay_buffer._storage))
 
-      return episode, render
+      return episode, renders
 
 
 def get_env_class(environment_type):
@@ -253,12 +259,14 @@ def main():
     # z = exploration_agent.infer_posterior()
 
     # TODO: Modify to run only up to certain num timesteps
+
+    # Exploration episode
     print(type(exploration_agent))
     exploration_episode, _ = run_episode(
         # Exploration epis ode gets ignored
         env_class.instruction_wrapper()(
             exploration_env, [], seed=max(0, step - 1)),
-        exploration_agent._dqn, exploration_agent, exploration=True)
+        exploration_agent._dqn, exploration_agent)
 
     # Needed to keep references to the trajectory and index for reward labeling
     for index, exp in enumerate(exploration_episode):
@@ -276,6 +284,7 @@ def main():
     if step % 2 == 0:
       trajectory_embedder.use_ids(False)
 
+    # Exploitation episode
     episode, _ = run_episode(
         instruction_env, instruction_agent,
         experience_observers=[instruction_agent.update])

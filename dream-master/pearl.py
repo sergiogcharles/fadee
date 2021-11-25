@@ -54,8 +54,12 @@ class InferenceNetwork(nn.Module):
   def __init__(self, env, hidden_dim=128, latent_dim=8):
     super(InferenceNetwork, self).__init__()
 
-    transition_input_dim = 2 * int(np.prod(env.observation_space.shape[0])) + int(np.prod(env.action_space.shape[0])) + 1
-    # transition_output_dim = 2 * latent_dim
+    observation_space_size = 0
+    for _, value in env.observation_space.spaces.items():
+      observation_space_size += int(np.prod(value.shape))
+
+    action_space_size = env.action_space.n
+    transition_input_dim = 2 * observation_space_size + action_space_size + 1
 
     self.linear1 = nn.Linear(transition_input_dim, hidden_dim)
     self.linear2 = nn.Linear(hidden_dim, hidden_dim)
@@ -92,10 +96,14 @@ class DQNAgent(object):
   def from_config(cls, config, env):
     dqn = DQNPolicy.from_config(config.get("policy"), env)
     replay_buffer = replay.ReplayBuffer.from_config(config.get("buffer"))
-    optimizer = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
-    return cls(dqn, replay_buffer, optimizer, config.get("sync_target_freq"),
+    optimizer_dqn = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
+    optimizer_inference = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
+    inference_net = InferenceNetwork(env)
+    latent_dim = 8
+
+    return cls(dqn, replay_buffer, optimizer_dqn, optimizer_inference, config.get("sync_target_freq"),
                config.get("min_buffer_size"), config.get("batch_size"),
-               config.get("update_freq"), config.get("max_grad_norm"))
+               config.get("update_freq"), config.get("max_grad_norm"), inference_net, latent_dim)
 
   def __init__(self, dqn, replay_buffer, optimizer_dqn, optimizer_inference, sync_freq,
                min_buffer_size, batch_size, update_freq, max_grad_norm, inference_net, latent_dim=8):
@@ -136,7 +144,7 @@ class DQNAgent(object):
     self._latent_dim = latent_dim
     self.context_batch_size = 10
 
-  def product_of_guassians(mus, sigmas_squared):
+  def product_of_guassians(self, mus, sigmas_squared):
     # Compute mu, sigma_squared for product of Gaussians 
     sigma_squared = 1. / torch.sum(torch.reciprocal(sigmas_squared), dim=0)
 
@@ -151,14 +159,14 @@ class DQNAgent(object):
       # #transitions in context x latent_dim
 
       # should return latent_dim-dimensional mu, sigma_squared
-      self.context_mu, self.context_sigma_squared = product_of_guassians(mus, sigmas_squared)
+      self.context_mu, self.context_sigma_squared = self.product_of_guassians(mus, sigmas_squared)
       dist = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
-      self.z = dist.sample()
+      self.z = dist.sample().reshape(1, -1)
     else:
       # Default to prior if no context
       dist = torch.distributions.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
-      self.z = dist.sample()
+      self.z = dist.sample().reshape(1, -1)
     return self.z
 
   def detach_z(self):
@@ -232,7 +240,7 @@ class DQNAgent(object):
         experiences = self._replay_buffer.sample(self._batch_size)
 
         self._optimizer_dqn.zero_grad()
-        loss = self._dqn.loss(experiences, np.ones(self._batch_size))
+        loss = self._dqn.loss(experiences, np.ones(self._batch_size), z)
         loss.backward()
         self._losses.append(loss.item())
 
@@ -487,7 +495,7 @@ class DQNPolicy(nn.Module):
 class RecurrentDQNPolicy(DQNPolicy):
   """Implements a DQN policy that uses an RNN on the observations."""
 
-  def loss(self, experiences, weights):
+  def loss(self, experiences, weights, z):
     """Updates recurrent parameters from a batch of sequential experiences
 
     Minimizing the DQN loss:
@@ -623,11 +631,8 @@ class DQN(nn.Module):
     state_embed, hidden_state = self._state_embedder(states, hidden_states)
     
     # concatenate state and task encoding
-    print(state_embed.shape)
-
-    # z = self.infer_posterior(context)
-
-    state_embed = torch.cat((state_embed, z.detach()))
+    if z != None:
+      state_embed = torch.cat((state_embed, z.detach()), dim=1)
     return self._q_values(state_embed), hidden_state
 
 
@@ -637,21 +642,22 @@ class DuelingNetwork(DQN):
     # Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
     Q(s, a, z) = V(s, z) + A(s, a, z) - avg_a' A(s, a', z)
   """
-  def __init__(self, num_actions, state_embedder, latent_dim=8):
+  def __init__(self, num_actions, state_embedder, latent_dim=8, exploration=False):
     super(DuelingNetwork, self).__init__(num_actions, state_embedder)
-    self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
-    self._A = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
+    if exploration:
+      self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
+      self._A = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
+    else:
+      self._V = nn.Linear(self._state_embedder.embed_dim, 1)
+      self._A = nn.Linear(self._state_embedder.embed_dim, num_actions)
 
   def forward(self, states, z, hidden_states=None):
     state_embedding, hidden_state = self._state_embedder(states, hidden_states)
 
     # concatenate state and task encoding
-    print(state_embed.shape)
+    if z != None:
+      state_embedding = torch.cat((state_embedding, z.detach()), dim=1)
 
-    # z = self.infer_posterior(context)
-
-    # concatenate state with task encoding
-    state_embedding = torch.cat((state_embedding, z.detach()))
     V = self._V(state_embedding)
     advantage = self._A(state_embedding)
     mean_advantage = torch.mean(advantage)
