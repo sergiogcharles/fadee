@@ -93,8 +93,8 @@ class InferenceNetwork(nn.Module):
 
 class DQNAgent(object):
   @classmethod
-  def from_config(cls, config, env):
-    dqn = DQNPolicy.from_config(config.get("policy"), env)
+  def from_config(cls, config, env, exploration):
+    dqn = DQNPolicy.from_config(config.get("policy"), env, exploration)
     replay_buffer = replay.ReplayBuffer.from_config(config.get("buffer"))
     optimizer_dqn = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
     optimizer_inference = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
@@ -320,7 +320,7 @@ class DQNAgent(object):
 # TODO(evzliu): Add Policy base class
 class DQNPolicy(nn.Module):
   @classmethod
-  def from_config(cls, config, env):
+  def from_config(cls, config, env, exploration):
     def embedder_factory():
       embedder_config = config.get("embedder")
       embed_type = embedder_config.get("type")
@@ -347,10 +347,10 @@ class DQNPolicy(nn.Module):
     epsilon_schedule = schedule.LinearSchedule.from_config(
         config.get("epsilon_schedule"))
     return cls(env.action_space.n, epsilon_schedule, config.get("test_epsilon"),
-               embedder_factory, config.get("discount"))
+               embedder_factory, exploration, config.get("discount"))
 
   def __init__(self, num_actions, epsilon_schedule, test_epsilon,
-               state_embedder_factory, gamma=0.99):
+               state_embedder_factory, exploration, gamma=0.99):
     """DQNPolicy should typically be constructed via from_config, and not
     through the constructor.
 
@@ -362,11 +362,12 @@ class DQNPolicy(nn.Module):
         True in act)
       state_embedder_factory (Callable --> StateEmbedder): type of state
         embedder to use
+      exploration: bool whether or not this is the exploration policy
       gamma (float): discount factor
     """
     super().__init__()
-    self._Q = DuelingNetwork(num_actions, state_embedder_factory())
-    self._target_Q = DuelingNetwork(num_actions, state_embedder_factory())
+    self._Q = DuelingNetwork(num_actions, state_embedder_factory(), exploration)
+    self._target_Q = DuelingNetwork(num_actions, state_embedder_factory(), exploration)
     self._num_actions = num_actions
     self._epsilon_schedule = epsilon_schedule
     self._test_epsilon = test_epsilon
@@ -378,6 +379,8 @@ class DQNPolicy(nn.Module):
     self._max_q = collections.deque(maxlen=1000)
     self._min_q = collections.deque(maxlen=1000)
     self._losses = collections.defaultdict(lambda: collections.deque(maxlen=1000))
+
+    self.exploration = exploration
 
   def act(self, state, z, prev_hidden_state=None, test=False):
     """
@@ -606,7 +609,7 @@ class RecurrentDQNPolicy(DQNPolicy):
 
 class DQN(nn.Module):
   """Implements the Q-function."""
-  def __init__(self, num_actions, state_embedder, latent_dim=8):
+  def __init__(self, num_actions, state_embedder, exploration, latent_dim=8):
     """
     Args:
       num_actions (int): the number of possible actions at each state
@@ -614,7 +617,12 @@ class DQN(nn.Module):
     """
     super(DQN, self).__init__()
     self._state_embedder = state_embedder
-    self._q_values = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
+    self.exploration = exploration
+    
+    if self.exploration:
+      self._q_values = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
+    else:
+      self._q_values = nn.Linear(self._state_embedder.embed_dim, num_actions)
 
   def forward(self, states, z, hidden_states=None):
     """Returns Q-values for each of the states.
@@ -642,9 +650,11 @@ class DuelingNetwork(DQN):
     # Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
     Q(s, a, z) = V(s, z) + A(s, a, z) - avg_a' A(s, a', z)
   """
-  def __init__(self, num_actions, state_embedder, latent_dim=8, exploration=False):
-    super(DuelingNetwork, self).__init__(num_actions, state_embedder)
-    if exploration:
+  def __init__(self, num_actions, state_embedder, exploration, latent_dim=8):
+    super(DuelingNetwork, self).__init__(num_actions, state_embedder, exploration)
+    print(f"duelign explore {exploration}")
+    self.exploration = exploration
+    if self.exploration:
       self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
       self._A = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
     else:

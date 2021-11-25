@@ -124,7 +124,9 @@ def get_env_class(environment_type):
 
 def get_instruction_agent(instruction_config, instruction_env):
   if instruction_config.get("type") == "learned":
-    return dqn.DQNAgent.from_config(instruction_config, instruction_env)
+    print('HERE EXPLOITATION')
+    exploration = False
+    return dqn.DQNAgent.from_config(instruction_config, instruction_env, exploration)
   else:
     raise ValueError(
         "Invalid instruction agent: {}".format(instruction_config.get("type")))
@@ -132,13 +134,15 @@ def get_instruction_agent(instruction_config, instruction_env):
 
 def get_exploration_agent(exploration_config, exploration_env):
   if exploration_config.get("type") == "learned":
-    return dqn.DQNAgent.from_config(exploration_config, exploration_env)
+    print('HERE EXPLORATION')
+    exploration = True
+    return dqn.DQNAgent.from_config(exploration_config, exploration_env, exploration)
   elif exploration_config.get("type") == "random":
     return policy.RandomPolicy(exploration_env.action_space)
   elif exploration_config.get("type") == "none":
     return policy.ConstantActionPolicy(grid.Action.end_episode)
-  elif exploration_config.get("type") == "task_specific":
-    return policy.PEARLAgent(exploration_env.action_space, exploration_env.observation_space)
+  # elif exploration_config.get("type") == "task_specific":
+  #   return policy.PEARLAgent(exploration_env.action_space, exploration_env.observation_space)
   else:
     raise ValueError("Invalid exploration agent: {}".format(
       exploration_config.get("type")))
@@ -263,10 +267,12 @@ def main():
     # Exploration episode
     print(type(exploration_agent))
     exploration_episode, _ = run_episode(
-        # Exploration epis ode gets ignored
+        # Exploration episode gets ignored
         env_class.instruction_wrapper()(
             exploration_env, [], seed=max(0, step - 1)),
         exploration_agent._dqn, exploration_agent)
+
+    # Perform update on DQN
 
     # Needed to keep references to the trajectory and index for reward labeling
     for index, exp in enumerate(exploration_episode):
@@ -285,6 +291,9 @@ def main():
       trajectory_embedder.use_ids(False)
 
     # Exploitation episode
+    # breakpoint()
+    # print('NOW HERE')
+
     episode, _ = run_episode(
         instruction_env, instruction_agent,
         experience_observers=[instruction_agent.update])
@@ -345,7 +354,8 @@ def main():
         exploration_episode, exploration_render = run_episode(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, test_index - 1), test=True),
-            exploration_agent, test=True)
+            exploration_agent._dqn, exploration_agent, test=True)
+
         test_exploration_lengths.append(len(exploration_episode))
 
         instruction_env = env_class.instruction_wrapper()(
@@ -385,7 +395,7 @@ def main():
         exploration_episode, exploration_render = run_episode(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, train_index - 1)),
-            exploration_agent, test=True)
+            exploration_agent._dqn, exploration_agent, test=True)
 
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=train_index + 1)
