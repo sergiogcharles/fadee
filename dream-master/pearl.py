@@ -58,7 +58,7 @@ class InferenceNetwork(nn.Module):
 
     observation_space_size = 0
     if self.exploration:
-      print(env.observation_space.spaces["observation"].shape)
+      # print(env.observation_space.spaces["observation"].shape)
       observation_space_size = env.observation_space.spaces["observation"].shape[0]
     else:
       for key, value in env.observation_space.spaces.items():
@@ -88,7 +88,7 @@ class InferenceNetwork(nn.Module):
     x = F.relu(x)
 
     mu = self.mu_head(x)
-    sigma_squared = F.relu(self.sigma_head(x))
+    sigma_squared = F.softplus(self.sigma_head(x))
 
     return mu, sigma_squared
 
@@ -175,12 +175,9 @@ class DQNAgent(object):
       # Compute q(z|c) from context then sample z from q(z|c)
       mus, sigmas_squared = self._inference_net(context)
       # #transitions in context x latent_dim
-
       # should return latent_dim-dimensional mu, sigma_squared
       self.context_mu, self.context_sigma_squared = self.product_of_guassians(mus, sigmas_squared)
 
-      print(self.context_mu)
-      print(self.context_sigma_squared)
       dist = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
       self.z = dist.sample().reshape(1, -1)
@@ -276,7 +273,7 @@ class DQNAgent(object):
       # Add experience to context
       # print(state, action, reward, next_state)
       # print(state.shape)
-      print(next_state.shape)
+      # print(next_state.shape)
       context_list.append(torch.cat((state, action, reward, next_state)))
 
     # Convert to torch tensor of size batch_size x concatenated experience vector
@@ -288,6 +285,7 @@ class DQNAgent(object):
     posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
     # Compute DQN loss
+    # breakpoint()
     dqn_loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())        
     self._dqn_losses.append(dqn_loss)
     self._losses.append(dqn_loss.item())
@@ -521,7 +519,7 @@ class DQNPolicy(nn.Module):
 
     # DDQN
     best_actions = torch.max(self._Q(next_states, z, None)[0], 1)[1].unsqueeze(1)
-    next_state_q_values = self._target_Q(next_states, None)[0].gather(
+    next_state_q_values = self._target_Q(next_states, z, None)[0].gather(
         1, best_actions).squeeze(1)
     targets = rewards + self._gamma * (
       next_state_q_values * not_done_mask.float())
@@ -646,7 +644,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     next_q_values = next_q_values.reshape(batch_size * seq_len, -1)
     best_actions = torch.max(next_q_values, 1)[1].unsqueeze(1)
     # Using the same hidden states for target
-    target_q_values, _ = self._target_Q(next_states, next_hidden_states)
+    target_q_values, _ = self._target_Q(next_states, Z, next_hidden_states)
     target_q_values = target_q_values.reshape(batch_size * seq_len, -1)
     next_state_q_values = target_q_values.gather(1, best_actions).squeeze(1)
     targets = rewards + self._gamma * (
@@ -729,6 +727,10 @@ class DuelingNetwork(DQN):
   def __init__(self, num_actions, state_embedder, exploration, latent_dim=8):
     super(DuelingNetwork, self).__init__(num_actions, state_embedder, exploration)
     self.exploration = exploration
+
+    breakpoint()
+    print(self._state_embedder.embed_dim)
+
     if self.exploration:
       self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
       self._A = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
@@ -738,11 +740,11 @@ class DuelingNetwork(DQN):
 
   def forward(self, states, z, hidden_states=None):
     state_embedding, hidden_state = self._state_embedder(states, hidden_states)
-
+    # breakpoint()
     # concatenate state and task encoding
+    print(f'state embedding {state_embedding.shape} z {z.shape}')
+
     if z != None:
-      print(state_embedding.shape)
-      print(z.detach().shape)
       state_embedding = torch.cat((state_embedding, z.detach()), dim=1)
 
     V = self._V(state_embedding)
