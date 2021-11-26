@@ -95,8 +95,8 @@ class SequentialReplayBuffer(ReplayBuffer):
       True.
     """
 
-    print(f'len {len(self._storage)}')
-    
+    # print(f'len {len(self._storage)}')
+
     indices = np.random.randint(len(self._storage), size=batch_size)
     sequences = []
     for index in indices:
