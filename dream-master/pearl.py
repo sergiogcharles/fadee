@@ -51,24 +51,35 @@ class InferenceNetworkRNN(nn.Module):
 #     return x
 
 class InferenceNetwork(nn.Module):
-  def __init__(self, env, hidden_dim=128, latent_dim=8):
+  def __init__(self, env, exploration, hidden_dim=128, latent_dim=8):
     super(InferenceNetwork, self).__init__()
 
-    observation_space_size = 0
-    for _, value in env.observation_space.spaces.items():
-      observation_space_size += int(np.prod(value.shape))
+    self.exploration = exploration
 
-    action_space_size = env.action_space.n
-    transition_input_dim = 2 * observation_space_size + action_space_size + 1
+    observation_space_size = 0
+    if self.exploration:
+      print(env.observation_space.spaces["observation"].shape)
+      observation_space_size = env.observation_space.spaces["observation"].shape[0]
+    else:
+      for key, value in env.observation_space.spaces.items():
+        if key == "observation" or key == "instructions":
+          observation_space_size += value.shape[0]
+
+    # action_space_size = env.action_space.n
+    # print(observation_space_size)
+    transition_input_dim = 2 * observation_space_size + 1 + 1
+    # print(f'obs size {2 * observation_space_size + action_space_size + 1}')
 
     self.linear1 = nn.Linear(transition_input_dim, hidden_dim)
     self.linear2 = nn.Linear(hidden_dim, hidden_dim)
     self.linear3 = nn.Linear(hidden_dim, hidden_dim)
 
+    # Get f_theta^mu, f_theta^sigma
     self.mu_head = nn.Linear(hidden_dim, latent_dim)
     self.sigma_head = nn.Linear(hidden_dim, latent_dim)
 
   def forward(self, context):
+    # breakpoint()
     x = self.linear1(context)
     x = F.relu(x)
     x = self.linear2(x)
@@ -98,15 +109,15 @@ class DQNAgent(object):
     replay_buffer = replay.ReplayBuffer.from_config(config.get("buffer"))
     optimizer_dqn = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
     optimizer_inference = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
-    inference_net = InferenceNetwork(env)
+    inference_net = InferenceNetwork(env, exploration)
     latent_dim = 8
 
     return cls(dqn, replay_buffer, optimizer_dqn, optimizer_inference, config.get("sync_target_freq"),
                config.get("min_buffer_size"), config.get("batch_size"),
-               config.get("update_freq"), config.get("max_grad_norm"), inference_net, latent_dim)
+               config.get("update_freq"), config.get("max_grad_norm"), inference_net, exploration, latent_dim)
 
   def __init__(self, dqn, replay_buffer, optimizer_dqn, optimizer_inference, sync_freq,
-               min_buffer_size, batch_size, update_freq, max_grad_norm, inference_net, latent_dim=8):
+               min_buffer_size, batch_size, update_freq, max_grad_norm, inference_net, exploration, latent_dim=8):
     """
     Args:
       dqn (DQNPolicy)
@@ -132,12 +143,19 @@ class DQNAgent(object):
     self._update_freq = update_freq
     self._max_grad_norm = max_grad_norm
     self._updates = 0
+    self._exploration = exploration
 
+
+    # Torch DQN losses
+    self._dqn_losses = collections.deque(maxlen=100)
+    # Integer losses for everything else
+    self._dqn_theta_losses = collections.deque(maxlen=100)
+    self._kl_phi_losses = collections.deque(maxlen=100)
+    self._total_phi_losses = collections.deque(maxlen=100)
     self._losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
 
     self._inference_net = inference_net
-    self._kl_losses = collections.deque(maxlen=100)
     self.z = None
     self.context_mu = None
     self.context_sigma_squared = None
@@ -153,13 +171,16 @@ class DQNAgent(object):
     return mu, sigma_squared
 
   def infer_posterior(self, context):
-    if context:
+    if context != None:
       # Compute q(z|c) from context then sample z from q(z|c)
       mus, sigmas_squared = self._inference_net(context)
       # #transitions in context x latent_dim
 
       # should return latent_dim-dimensional mu, sigma_squared
       self.context_mu, self.context_sigma_squared = self.product_of_guassians(mus, sigmas_squared)
+
+      print(self.context_mu)
+      print(self.context_sigma_squared)
       dist = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
       self.z = dist.sample().reshape(1, -1)
@@ -206,52 +227,107 @@ class DQNAgent(object):
 
     # TODO: NEED TO ENSURE THIS MAKES SENSE
 
-    if len(self._replay_buffer) >= self._min_buffer_size:
-      if self._updates % self._update_freq == 0:
-        # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
-        context = None
-        if len(self._replay_buffer._storage) < self.context_batch_size:
-          context = self._replay_buffer.context_sample(len(self._replay_buffer._storage))
-        else:
-          context = self._replay_buffer.context_sample(self.context_batch_size)
+    # if len(self._replay_buffer) >= self._min_buffer_size:
+    #   if self._updates % self._update_freq == 0:
 
-        self._optimizer_inference.zero_grad()
+    # Sample context and batch (Page 5 of PEARL)
 
-        # Compute KL-divergence loss
-        prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
-        # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
-        posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
+    # This is like batch b^i in 
+    experiences = self._replay_buffer.sample(self._batch_size)
 
-        # Sample z from posterior
-        z = self.infer_posterior(context)
+    # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
+    # context = None
+    # if len(self._replay_buffer._storage) < self.context_batch_size:
+    #   context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))
+    # else:
+    #   context = self._replay_buffer.sample_context(self.context_batch_size)
+    context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))[0]
 
-        # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
-        # kl_loss = torch.sum(torch.stack(kl_losses))
-        kl_loss = torch.distributions.kl.kl_divergence(prior, posterior)
-        kl_loss.backward()
+    # Update wrt phis
+    self._optimizer_inference.zero_grad()
 
-        self._kl_losses.append(kl_loss.item())
+    batch_size = len(context)
+    states = [e.state for e in context]
+    actions = torch.tensor([e.action for e in context]).long()
+    next_states = [e.next_state for e in context]
+    rewards = torch.tensor([e.reward for e in context]).float()
 
-        self._optimizer_inference.step()
+    context_list = []
 
-        ##########################################################################
+    for b in range(batch_size):
+      # index 0 corresponds to "observation", index 1 corresponds to "instructions"
+      # instructions returns numpy array, so we need to cast to Long tensor
+      # print(torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1]))))
+      state = None
+      next_state = None
+      if self._exploration:
+        # Only use observation
+        state = states[b][0]
+        next_state = next_states[b][0]
+      else:
+        # Use observation and instructions
+        state = torch.cat((states[b][0], torch.from_numpy(states[b][1])))
+        next_state = torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1])))
 
-        # This is like batch b^i in 
-        experiences = self._replay_buffer.sample(self._batch_size)
+      # Actions
+      action = actions[b].unsqueeze(dim=0).type(torch.LongTensor)
+      reward = rewards[b].unsqueeze(dim=0).type(torch.LongTensor)
 
-        self._optimizer_dqn.zero_grad()
-        loss = self._dqn.loss(experiences, np.ones(self._batch_size), z)
-        loss.backward()
-        self._losses.append(loss.item())
+      # Add experience to context
+      # print(state, action, reward, next_state)
+      # print(state.shape)
+      print(next_state.shape)
+      context_list.append(torch.cat((state, action, reward, next_state)))
 
-        # clip according to the max allowed grad norm
-        grad_norm = torch_utils.clip_grad_norm_(
-            self._dqn.parameters(), self._max_grad_norm, norm_type=2)
-        self._grad_norms.append(grad_norm)
-        self._optimizer_dqn.step()
+    # Convert to torch tensor of size batch_size x concatenated experience vector
+    context = torch.stack(context_list).type(torch.FloatTensor)
 
-      if self._updates % self._sync_freq == 0:
-        self._dqn.sync_target()
+    # Sample z from posterior
+    z = self.infer_posterior(context)
+
+    posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
+
+    # Compute DQN loss
+    dqn_loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())        
+    self._dqn_losses.append(dqn_loss)
+    self._losses.append(dqn_loss.item())
+
+    # Compute KL-divergence loss
+    prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
+    # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
+
+    # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
+    # kl_loss = torch.sum(torch.stack(kl_losses))
+    kl_loss = torch.distributions.kl.kl_divergence(prior, posterior)
+    self._kl_phi_losses.append(kl_loss.item())
+
+    total_loss = kl_loss + dqn_loss
+    self._total_phi_losses.append(total_loss.item())
+
+    total_loss.backward()
+    self._optimizer_inference.step()
+
+    ##########################################################################
+
+    # # This is like batch b^i in 
+    # experiences = self._replay_buffer.sample(self._batch_size)
+    # Update wrt thetas of DQN
+
+    self._optimizer_dqn.zero_grad()
+    # Critic loss (if we were in actor-critic setup)
+    # loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())
+    loss = self._dqn_losses[-1]
+    loss.backward()
+    self._dqn_theta_losses.append(loss.item())
+
+    # clip according to the max allowed grad norm
+    grad_norm = torch_utils.clip_grad_norm_(
+        self._dqn.parameters(), self._max_grad_norm, norm_type=2)
+    self._grad_norms.append(grad_norm)
+    self._optimizer_dqn.step()
+
+    if self._updates % self._sync_freq == 0:
+      self._dqn.sync_target()
 
     self._updates += 1
 
@@ -618,7 +694,7 @@ class DQN(nn.Module):
     super(DQN, self).__init__()
     self._state_embedder = state_embedder
     self.exploration = exploration
-    
+
     if self.exploration:
       self._q_values = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
     else:
@@ -640,7 +716,7 @@ class DQN(nn.Module):
     
     # concatenate state and task encoding
     if z != None:
-      state_embed = torch.cat((state_embed, z.detach()), dim=1)
+      state_embed = torch.cat((state_embed, z.detach()), dim=0)
     return self._q_values(state_embed), hidden_state
 
 
@@ -652,7 +728,6 @@ class DuelingNetwork(DQN):
   """
   def __init__(self, num_actions, state_embedder, exploration, latent_dim=8):
     super(DuelingNetwork, self).__init__(num_actions, state_embedder, exploration)
-    print(f"duelign explore {exploration}")
     self.exploration = exploration
     if self.exploration:
       self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
@@ -666,6 +741,8 @@ class DuelingNetwork(DQN):
 
     # concatenate state and task encoding
     if z != None:
+      print(state_embedding.shape)
+      print(z.detach().shape)
       state_embedding = torch.cat((state_embedding, z.detach()), dim=1)
 
     V = self._V(state_embedding)

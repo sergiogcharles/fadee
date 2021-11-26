@@ -108,7 +108,8 @@ def get_env_class(environment_type):
   elif environment_type == "distraction":
     return city.DistractionGridEnv
   elif environment_type == "map":
-    return city.MapGridEnv
+    # return city.MapGridEnv
+    return updated.MapGridEnv
   elif environment_type == "cooking":
     return cooking.CookingGridEnv
   elif environment_type == "updated":
@@ -124,7 +125,7 @@ def get_env_class(environment_type):
 
 def get_instruction_agent(instruction_config, instruction_env):
   if instruction_config.get("type") == "learned":
-    print('HERE EXPLOITATION')
+    # print('HERE EXPLOITATION')
     exploration = False
     return dqn.DQNAgent.from_config(instruction_config, instruction_env, exploration)
   else:
@@ -134,7 +135,7 @@ def get_instruction_agent(instruction_config, instruction_env):
 
 def get_exploration_agent(exploration_config, exploration_env):
   if exploration_config.get("type") == "learned":
-    print('HERE EXPLORATION')
+    # print('HERE EXPLORATION')
     exploration = True
     return dqn.DQNAgent.from_config(exploration_config, exploration_env, exploration)
   elif exploration_config.get("type") == "random":
@@ -265,7 +266,7 @@ def main():
     # TODO: Modify to run only up to certain num timesteps
 
     # Exploration episode
-    print(type(exploration_agent))
+    # print(type(exploration_agent))
     exploration_episode, _ = run_episode(
         # Exploration episode gets ignored
         env_class.instruction_wrapper()(
