@@ -325,7 +325,9 @@ class DQNAgent(object):
             self._dqn.parameters(), self._max_grad_norm, norm_type=2)
         self._grad_norms.append(grad_norm)
         self._optimizer_dqn.step()
-      print(f'Update phi loss: {self._total_phi_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
+
+        if self._updates % 1000 == 0:
+          print(f'Update phi loss: {self._total_phi_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
 
       if self._updates % self._sync_freq == 0:
         self._dqn.sync_target()
