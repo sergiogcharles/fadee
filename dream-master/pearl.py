@@ -108,8 +108,8 @@ class DQNAgent(object):
     dqn = DQNPolicy.from_config(config.get("policy"), env, exploration)
     replay_buffer = replay.ReplayBuffer.from_config(config.get("buffer"))
     optimizer_dqn = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
-    optimizer_inference = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
     inference_net = InferenceNetwork(env, exploration)
+    optimizer_inference = optim.Adam(inference_net.parameters(), lr=config.get("learning_rate"))
     latent_dim = 8
 
     return cls(dqn, replay_buffer, optimizer_dqn, optimizer_inference, config.get("sync_target_freq"),
@@ -191,7 +191,7 @@ class DQNAgent(object):
     # removes z from computational graph so we don't backprop through
     self.z = self.z.detach()
 
-  def update(self, experience):
+  def update(self, experience, beta=1e-4):
     """Updates agent on this experience.
 
     Args:
@@ -224,108 +224,111 @@ class DQNAgent(object):
 
     # TODO: NEED TO ENSURE THIS MAKES SENSE
 
-    # if len(self._replay_buffer) >= self._min_buffer_size:
-    #   if self._updates % self._update_freq == 0:
+    if len(self._replay_buffer) >= self._min_buffer_size:
+      if self._updates % self._update_freq == 0:
+        # Sample context and batch (Page 5 of PEARL)
 
-    # Sample context and batch (Page 5 of PEARL)
+        # This is like batch b^i in 
+        experiences = self._replay_buffer.sample(self._batch_size)
 
-    # This is like batch b^i in 
-    experiences = self._replay_buffer.sample(self._batch_size)
+        # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
+        # context = None
+        # if len(self._replay_buffer._storage) < self.context_batch_size:
+        #   context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))
+        # else:
+        #   context = self._replay_buffer.sample_context(self.context_batch_size)
+        context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))[0]
 
-    # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
-    # context = None
-    # if len(self._replay_buffer._storage) < self.context_batch_size:
-    #   context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))
-    # else:
-    #   context = self._replay_buffer.sample_context(self.context_batch_size)
-    context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))[0]
+        # Update wrt phis
+        self._optimizer_inference.zero_grad()
 
-    # Update wrt phis
-    self._optimizer_inference.zero_grad()
+        batch_size = len(context)
+        states = [e.state for e in context]
+        actions = torch.tensor([e.action for e in context]).long()
+        next_states = [e.next_state for e in context]
+        rewards = torch.tensor([e.reward for e in context]).float()
 
-    batch_size = len(context)
-    states = [e.state for e in context]
-    actions = torch.tensor([e.action for e in context]).long()
-    next_states = [e.next_state for e in context]
-    rewards = torch.tensor([e.reward for e in context]).float()
+        context_list = []
 
-    context_list = []
+        for b in range(batch_size):
+          # index 0 corresponds to "observation", index 1 corresponds to "instructions"
+          # instructions returns numpy array, so we need to cast to Long tensor
+          # print(torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1]))))
+          state = None
+          next_state = None
+          if self._exploration:
+            # Only use observation
+            state = states[b][0]
+            next_state = next_states[b][0]
+          else:
+            # Use observation and instructions
+            state = torch.cat((states[b][0], torch.from_numpy(states[b][1])))
+            next_state = torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1])))
 
-    for b in range(batch_size):
-      # index 0 corresponds to "observation", index 1 corresponds to "instructions"
-      # instructions returns numpy array, so we need to cast to Long tensor
-      # print(torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1]))))
-      state = None
-      next_state = None
-      if self._exploration:
-        # Only use observation
-        state = states[b][0]
-        next_state = next_states[b][0]
-      else:
-        # Use observation and instructions
-        state = torch.cat((states[b][0], torch.from_numpy(states[b][1])))
-        next_state = torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1])))
+          # Actions
+          action = actions[b].unsqueeze(dim=0).type(torch.LongTensor)
+          reward = rewards[b].unsqueeze(dim=0).type(torch.LongTensor)
 
-      # Actions
-      action = actions[b].unsqueeze(dim=0).type(torch.LongTensor)
-      reward = rewards[b].unsqueeze(dim=0).type(torch.LongTensor)
+          # Add experience to context
+          # print(state, action, reward, next_state)
+          # print(state.shape)
+          # print(next_state.shape)
+          context_list.append(torch.cat((state, action, reward, next_state)))
 
-      # Add experience to context
-      # print(state, action, reward, next_state)
-      # print(state.shape)
-      # print(next_state.shape)
-      context_list.append(torch.cat((state, action, reward, next_state)))
+        # Convert to torch tensor of size batch_size x concatenated experience vector
+        context = torch.stack(context_list).type(torch.FloatTensor)
 
-    # Convert to torch tensor of size batch_size x concatenated experience vector
-    context = torch.stack(context_list).type(torch.FloatTensor)
+        # Sample z from posterior
+        z = self.infer_posterior(context)
 
-    # Sample z from posterior
-    z = self.infer_posterior(context)
+        posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
-    posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
+        # Compute DQN loss
+        # breakpoint()
+        dqn_loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())        
+        self._dqn_losses.append(dqn_loss)
+        self._losses.append(dqn_loss.item())
 
-    # Compute DQN loss
-    # breakpoint()
-    dqn_loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())        
-    self._dqn_losses.append(dqn_loss)
-    self._losses.append(dqn_loss.item())
+        # Compute KL-divergence loss
+        prior = torch.distributions.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
+        # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
 
-    # Compute KL-divergence loss
-    prior = torch.distribution.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
-    # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
+        # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
+        # kl_loss = torch.sum(torch.stack(kl_losses))
+        kl_losses = torch.distributions.kl.kl_divergence(prior, posterior)
+        kl_loss = torch.sum(kl_losses)
+        # print(f'kl loss {beta * kl_loss} dqn loss {dqn_loss}')
+        
+        self._kl_phi_losses.append(kl_loss.item())
 
-    # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
-    # kl_loss = torch.sum(torch.stack(kl_losses))
-    kl_loss = torch.distributions.kl.kl_divergence(prior, posterior)
-    self._kl_phi_losses.append(kl_loss.item())
+        total_loss = beta * kl_loss + dqn_loss
+        self._total_phi_losses.append(total_loss.item())
 
-    total_loss = kl_loss + dqn_loss
-    self._total_phi_losses.append(total_loss.item())
+        total_loss.backward(retain_graph=True)
+        self._optimizer_inference.step()
 
-    total_loss.backward()
-    self._optimizer_inference.step()
+        ##########################################################################
 
-    ##########################################################################
+        # # This is like batch b^i in 
+        # experiences = self._replay_buffer.sample(self._batch_size)
+        # Update wrt thetas of DQN
 
-    # # This is like batch b^i in 
-    # experiences = self._replay_buffer.sample(self._batch_size)
-    # Update wrt thetas of DQN
+        self._optimizer_dqn.zero_grad()
+        # Critic loss (if we were in actor-critic setup)
+        # loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())
+        loss = self._dqn_losses[-1]
+        loss.backward()
+        self._dqn_theta_losses.append(loss.item())
 
-    self._optimizer_dqn.zero_grad()
-    # Critic loss (if we were in actor-critic setup)
-    # loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())
-    loss = self._dqn_losses[-1]
-    loss.backward()
-    self._dqn_theta_losses.append(loss.item())
+        # clip according to the max allowed grad norm
+        grad_norm = torch_utils.clip_grad_norm_(
+            self._dqn.parameters(), self._max_grad_norm, norm_type=2)
+        self._grad_norms.append(grad_norm)
+        self._optimizer_dqn.step()
+      print(f'Update phi loss: {self._total_phi_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
 
-    # clip according to the max allowed grad norm
-    grad_norm = torch_utils.clip_grad_norm_(
-        self._dqn.parameters(), self._max_grad_norm, norm_type=2)
-    self._grad_norms.append(grad_norm)
-    self._optimizer_dqn.step()
-
-    if self._updates % self._sync_freq == 0:
-      self._dqn.sync_target()
+      if self._updates % self._sync_freq == 0:
+        self._dqn.sync_target()
 
     self._updates += 1
 
@@ -644,7 +647,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     next_q_values = next_q_values.reshape(batch_size * seq_len, -1)
     best_actions = torch.max(next_q_values, 1)[1].unsqueeze(1)
     # Using the same hidden states for target
-    target_q_values, _ = self._target_Q(next_states, Z, next_hidden_states)
+    target_q_values, _ = self._target_Q(next_states, z, next_hidden_states)
     target_q_values = target_q_values.reshape(batch_size * seq_len, -1)
     next_state_q_values = target_q_values.gather(1, best_actions).squeeze(1)
     targets = rewards + self._gamma * (
@@ -713,8 +716,25 @@ class DQN(nn.Module):
     state_embed, hidden_state = self._state_embedder(states, hidden_states)
     
     # concatenate state and task encoding
+    # if z != None:
+    #   state_embed = torch.cat((state_embed, z.detach()), dim=0)
+    # return self._q_values(state_embed), hidden_state
     if z != None:
-      state_embed = torch.cat((state_embed, z.detach()), dim=0)
+      if state_embed.dim() == 2:
+        state_embed = torch.cat((state_embed, z.detach()), dim=1)
+      else:
+        # tile z to same dims as state_embedding
+        # state_embedding 32 x 11 x 64
+        # z is 1 x 1 x 8 -> 32 x 11 x 8
+        # concat: 32 x 11 x 72
+        x = list(state_embed.shape)
+        x[-1] = 1
+
+        z = z.unsqueeze(0)
+        z = z.repeat(tuple(x))
+        
+        state_embed = torch.cat((state_embed, z.detach()), dim=-1)
+
     return self._q_values(state_embed), hidden_state
 
 
@@ -728,7 +748,7 @@ class DuelingNetwork(DQN):
     super(DuelingNetwork, self).__init__(num_actions, state_embedder, exploration)
     self.exploration = exploration
 
-    breakpoint()
+    # HERE breakpoint()
     print(self._state_embedder.embed_dim)
 
     if self.exploration:
@@ -742,10 +762,23 @@ class DuelingNetwork(DQN):
     state_embedding, hidden_state = self._state_embedder(states, hidden_states)
     # breakpoint()
     # concatenate state and task encoding
-    print(f'state embedding {state_embedding.shape} z {z.shape}')
+    # print(f'state embedding {state_embedding.shape} z {z.shape}')
 
     if z != None:
-      state_embedding = torch.cat((state_embedding, z.detach()), dim=1)
+      if state_embedding.dim() == 2:
+        state_embedding = torch.cat((state_embedding, z.detach()), dim=1)
+      else:
+        # tile z to same dims as state_embedding
+        # state_embedding 32 x 11 x 64
+        # z is 1 x 1 x 8 -> 32 x 11 x 8
+        # concat: 32 x 11 x 72
+        x = list(state_embedding.shape)
+        x[-1] = 1
+
+        z = z.unsqueeze(0)
+        z = z.repeat(tuple(x))
+
+        state_embedding = torch.cat((state_embedding, z.detach()), dim=-1)
 
     V = self._V(state_embedding)
     advantage = self._A(state_embedding)

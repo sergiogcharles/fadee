@@ -94,6 +94,9 @@ class SequentialReplayBuffer(ReplayBuffer):
       where inner sequences are truncated early, if the last experience.done is
       True.
     """
+
+    print(f'len {len(self._storage)}')
+    
     indices = np.random.randint(len(self._storage), size=batch_size)
     sequences = []
     for index in indices:
