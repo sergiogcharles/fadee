@@ -167,7 +167,7 @@ def run_episode_exploration(env, policy, agent, experience_observers=None, test=
 
     # Training if the buffer is sufficiently large
     min_buffer_size = 10
-    num_training_steps = 50
+    num_training_steps = 10
     # Only start training once we have enough data
     if len(agent._replay_buffer_B._storage) > min_buffer_size:
       # Train inference network, i.e. do updates (note, should only done during meta-training, not eval)
@@ -179,7 +179,7 @@ def run_episode_exploration(env, policy, agent, experience_observers=None, test=
 
     # If episode completes
     if done:
-      print(len(episode))
+      # print(len(episode))
       for index, exp in enumerate(episode):
         agent._replay_buffer.add(relabel.TrajectoryExperience(exp, episode, index))
 

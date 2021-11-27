@@ -1,7 +1,7 @@
 {
     "environment": "map",
     "exploration_agent": {
-        "batch_size": 32,
+        "batch_size": 10,
         "buffer": {
             "max_buffer_size": 16000,
             "sequence_length": 50,

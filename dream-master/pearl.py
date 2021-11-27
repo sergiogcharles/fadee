@@ -166,8 +166,8 @@ class DQNAgent(object):
     self._dqn_losses = collections.deque(maxlen=100)
     # Integer losses for everything else
     self._dqn_theta_losses = collections.deque(maxlen=100)
-    self._kl_phi_losses = collections.deque(maxlen=100)
-    self._total_phi_losses = collections.deque(maxlen=100)
+    self._kl_lambda_losses = collections.deque(maxlen=100)
+    self._total_lambda_losses = collections.deque(maxlen=100)
     self._losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
 
@@ -208,7 +208,7 @@ class DQNAgent(object):
     self.w = self.w.detach()
 
   # def update(self, experience, beta=1e-4):
-  def update(self, beta=1e-4):
+  def update(self, beta=1e-1):
     """Updates agent on this experience.
 
     Args:
@@ -309,6 +309,7 @@ class DQNAgent(object):
     self._kl_lambda_losses.append(kl_loss.item())
 
     total_loss = beta * kl_loss + dqn_loss
+    # print(f'kl loss {beta * kl_loss} dqn {dqn_loss}')
     self._total_lambda_losses.append(total_loss.item())
 
     total_loss.backward(retain_graph=True)
@@ -339,9 +340,7 @@ class DQNAgent(object):
       # Update target DQN
       if self._updates % self._sync_freq == 0:
         self._dqn.sync_target()
-
-    if self._updates % 1000 == 0:
-      print(f'Update phi loss: {self._total_phi_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
+        print(f'Update phi loss: {self._total_lambda_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
 
     self._updates += 1
 
@@ -668,8 +667,6 @@ class RecurrentDQNPolicy(DQNPolicy):
     targets.detach_()  # Don't backprop through targets
 
     td_error = current_state_q_values.squeeze() - targets
-
-    print(weights.shape)
     
     weights = weights.unsqueeze(1) * mask.float()
     loss = (td_error ** 2).reshape(batch_size, seq_len) * weights
