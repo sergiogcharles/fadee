@@ -9,7 +9,8 @@ import torch
 import tqdm
 
 import config as cfg
-import pearl as dqn
+import pearl
+import dqn
 from envs import grid
 from envs import cooking
 from envs import city
@@ -20,7 +21,59 @@ import rl
 import utils
 
 
-def run_episode(env, policy, agent=None, experience_observers=None, test=False):
+
+def run_episode_exploitation(env, policy, experience_observers=None, test=False):
+  """Runs a single episode on the environment following the policy.
+  Args:
+    env (gym.Environment): environment to run on.
+    policy (Policy): policy to follow.
+    experience_observers (list[Callable] | None): each observer is called with
+      with each experience at each timestep.
+  Returns:
+    episode (list[Experience]): experiences from the episode.
+    renders (list[object | None]): renderings of the episode, only rendered if
+      test=True. Otherwise, returns list of Nones.
+  """
+  # Optimization: rendering takes a lot of time.
+  def maybe_render(env, action, reward, timestep):
+    if test:
+      render = env.render()
+      render.write_text("Action: {}".format(str(action)))
+      render.write_text("Reward: {}".format(reward))
+      render.write_text("Timestep: {}".format(timestep))
+      return render
+    return None
+
+  if experience_observers is None:
+    experience_observers = []
+
+  episode = []
+  state = env.reset()
+  timestep = 0
+  renders = [maybe_render(env, None, 0, timestep)]
+  hidden_state = None
+  
+  while True:
+    action, next_hidden_state = policy.act(
+        state, hidden_state, test=test)
+    next_state, reward, done, info = env.step(action)
+    timestep += 1
+    renders.append(
+        maybe_render(env, grid.Action(action), reward, timestep))
+    experience = rl.Experience(
+        state, action, reward, next_state, done, info, hidden_state,
+        next_hidden_state)
+    episode.append(experience)
+    for observer in experience_observers:
+      observer(experience)
+
+    state = next_state
+    hidden_state = next_hidden_state
+    if done:
+      return episode, renders
+
+
+def run_episode_exploration(env, policy, agent, experience_observers=None, test=False):
   """Runs a single episode on the environment following the policy.
 
   Args:
@@ -53,21 +106,51 @@ def run_episode(env, policy, agent=None, experience_observers=None, test=False):
   renders = [maybe_render(env, None, 0, timestep)]
   hidden_state = None
   context = None
-
-  # TODO: Do for K timesteps only-->This is like the first part in PEARL algo
-  # Then rollout for N timesteps
+  
+  # Effectively from t=1,...,H
   while True:
-    # Sample z (initially, prior)
+    # Sample context c ~ S_C(B^mu)
+    # context = agent._replay_buffer.sample_context()[0]
+    context = agent._replay_buffer_B.sample_context()
+    if context != []:
+      context = context[0]
 
-    # If agent exists, we are doing exploration
-    if agent:
-      z = agent.infer_posterior(context)
+    # Transform context to tensor
+    batch_size = len(context)
+    states = [e.state for e in context]
+    actions = torch.tensor([e.action for e in context]).long()
+    next_states = [e.next_state for e in context]
+    rewards = torch.tensor([e.reward for e in context]).float()
 
-      action, next_hidden_state = policy.act(
-          state, z, hidden_state, test=test)
-    else:
-      action, next_hidden_state = policy.act(
-          state, None, hidden_state, test=test)
+    context_list = []
+
+    for b in range(batch_size):
+      # index 0 corresponds to "observation", index 1 corresponds to "instructions"
+      # instructions returns numpy array, so we need to cast to Long tensor
+      # state = torch.cat((states[b][0], torch.from_numpy(states[b][1])))
+      # next_state = torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1])))
+      _state = states[b][0]
+      _next_state = next_states[b][0]
+      _action = actions[b].unsqueeze(dim=0).type(torch.LongTensor)
+      _reward = rewards[b].unsqueeze(dim=0).type(torch.LongTensor)
+
+      context_list.append(torch.cat((_state, _action, _reward, _next_state)))
+
+    # Convert to torch tensor of size batch_size x concatenated experience vector
+    if context_list != []:
+      context = torch.stack(context_list).type(torch.FloatTensor)
+    else: 
+      context = None
+
+    # Sample latent w ~ G_lambda(w|c^mu)
+    w = agent.infer_posterior(context)
+
+    # Rollout policy for 1 timestep, i.e. tau_t ~ pi^exp_phi(a|s, w, tau_{t-1})
+    action, next_hidden_state = policy.act(
+        state, w, hidden_state, test=test)
+    # else:
+    #   action, next_hidden_state = policy.act(
+    #       state, None, hidden_state, test=test)
     next_state, reward, done, info = env.step(action)
     timestep += 1
     renders.append(
@@ -76,20 +159,29 @@ def run_episode(env, policy, agent=None, experience_observers=None, test=False):
         state, action, reward, next_state, done, info, hidden_state,
         next_hidden_state)
     episode.append(experience)
+    # Add experience to replay buffer B^mu
+    agent._replay_buffer_B.add(experience)
+
     for observer in experience_observers:
       observer(experience)
 
+    # Training if the buffer is sufficiently large
+    min_buffer_size = 10
+    num_training_steps = 50
+    # Only start training once we have enough data
+    if len(agent._replay_buffer_B._storage) > min_buffer_size:
+      # Train inference network, i.e. do updates (note, should only done during meta-training, not eval)
+      for k in range(num_training_steps):
+        agent.update()
+
     state = next_state
     hidden_state = next_hidden_state
-    if done:
-      if agent:
-        # Only do this if it's the exploration episode
-        for index, exp in enumerate(episode):
-          # Add experience to replay buffer
-          agent._replay_buffer.add(relabel.TrajectoryExperience(exp, episode, index))
 
-        # Update context (as in 1st part of PEARL algo)
-        context = agent._replay_buffer.sample_context(len(agent._replay_buffer._storage))
+    # If episode completes
+    if done:
+      print(len(episode))
+      for index, exp in enumerate(episode):
+        agent._replay_buffer.add(relabel.TrajectoryExperience(exp, episode, index))
 
       return episode, renders
 
@@ -125,9 +217,9 @@ def get_env_class(environment_type):
 
 def get_instruction_agent(instruction_config, instruction_env):
   if instruction_config.get("type") == "learned":
-    # print('HERE EXPLOITATION')
-    exploration = False
-    return dqn.DQNAgent.from_config(instruction_config, instruction_env, exploration)
+    # exploration = False
+    # return dqn.DQNAgent.from_config(instruction_config, instruction_env, exploration)
+    return dqn.DQNAgent.from_config(instruction_config, instruction_env)
   else:
     raise ValueError(
         "Invalid instruction agent: {}".format(instruction_config.get("type")))
@@ -135,9 +227,7 @@ def get_instruction_agent(instruction_config, instruction_env):
 
 def get_exploration_agent(exploration_config, exploration_env):
   if exploration_config.get("type") == "learned":
-    # print('HERE EXPLORATION')
-    exploration = True
-    return dqn.DQNAgent.from_config(exploration_config, exploration_env, exploration)
+    return pearl.DQNAgent.from_config(exploration_config, exploration_env)
   elif exploration_config.get("type") == "random":
     return policy.RandomPolicy(exploration_env.action_space)
   elif exploration_config.get("type") == "none":
@@ -236,6 +326,7 @@ def main():
   instruction_agent = get_instruction_agent(instruction_config, instruction_env)
 
   exploration_config = config.get("exploration_agent")
+  # Initialize agent, thereby initializing inference net G_delta and buffer
   exploration_agent = get_exploration_agent(exploration_config, exploration_env)
 
   # Should probably expose this more gracefully
@@ -258,28 +349,24 @@ def main():
   exploration_steps = 0
   instruction_steps = 0
   for step in tqdm.tqdm(range(1000000)):
+
+    # New exploration environment
     exploration_env = create_env(step)
 
-    # Sample from posterior
-    # z = exploration_agent.infer_posterior()
-
-    # TODO: Modify to run only up to certain num timesteps
-
     # Exploration episode
-    # print(type(exploration_agent))
-    exploration_episode, _ = run_episode(
+    # We do updating of exploration policy's DQN in episode run
+    exploration_episode, _ = run_episode_exploration(
         # Exploration episode gets ignored
         env_class.instruction_wrapper()(
             exploration_env, [], seed=max(0, step - 1)),
         exploration_agent._dqn, exploration_agent)
 
     # Perform update on DQN
-
     # Needed to keep references to the trajectory and index for reward labeling
-    for index, exp in enumerate(exploration_episode):
-      exploration_agent.update(
-          relabel.TrajectoryExperience(exp, exploration_episode, index)
-          )
+    # for index, exp in enumerate(exploration_episode):
+    #   exploration_agent.update(
+    #       relabel.TrajectoryExperience(exp, exploration_episode, index)
+    #       )
 
     exploration_steps += len(exploration_episode)
     exploration_lengths.append(len(exploration_episode))
@@ -295,7 +382,7 @@ def main():
     # breakpoint()
     # print('NOW HERE')
 
-    episode, _ = run_episode(
+    episode, _ = run_episode_exploitation(
         instruction_env, instruction_agent,
         experience_observers=[instruction_agent.update])
     instruction_steps += len(episode)
@@ -352,7 +439,7 @@ def main():
       trajectory_embedder.use_ids(False)
       for test_index in tqdm.tqdm(range(100)):
         exploration_env = create_env(test_index, test=True)
-        exploration_episode, exploration_render = run_episode(
+        exploration_episode, exploration_render = run_episode_exploration(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, test_index - 1), test=True),
             exploration_agent._dqn, exploration_agent, test=True)
@@ -361,7 +448,7 @@ def main():
 
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=test_index + 1, test=True)
-        episode, render = run_episode(
+        episode, render = run_episode_exploitation(
             instruction_env, instruction_agent, test=True)
         test_rewards.append(sum(exp.reward for exp in episode))
 
@@ -393,14 +480,14 @@ def main():
         exploration_env = create_env(train_index)
         # Test flags here only refer to making agent act with test flag and
         # not test split environments
-        exploration_episode, exploration_render = run_episode(
+        exploration_episode, exploration_render = run_episode_exploration(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, train_index - 1)),
             exploration_agent._dqn, exploration_agent, test=True)
 
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=train_index + 1)
-        episode, render = run_episode(
+        episode, render = run_episode_exploitation(
             instruction_env, instruction_agent, test=True)
 
         frames = [frame.image() for frame in render]

@@ -49,12 +49,21 @@ class ReplayBuffer(object):
     indices = np.random.randint(len(self._storage), size=batch_size)
     return [self._storage[i] for i in indices]
 
-  def sample_context(self, num_context, num_recent=20):
+  def sample_if_possible(self, batch_size):
+    indices = None
+    if len(self._storage) < batch_size:
+      indices = np.random.randint(len(self._storage), size=len(self._storage))
+    else:
+      indices = np.random.randint(len(self._storage), size=batch_size)
+    return [self._storage[i] for i in indices]
+
+
+  def sample_context(self, num_recent=20):
     indices = None
     if num_recent < len(self._storage):
-      indices = np.random.randint(len(self._storage) - num_recent, len(self._storage), size=num_context)
+      indices = np.random.randint(len(self._storage) - num_recent, len(self._storage), size=num_recent)
     else:
-      indices = np.random.randint(len(self._storage), size=num_context)
+      indices = np.random.randint(len(self._storage), size=len(self._storage))
     return [self._storage[i] for i in indices]
 
 class SequentialReplayBuffer(ReplayBuffer):

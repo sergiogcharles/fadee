@@ -50,25 +50,40 @@ class InferenceNetworkRNN(nn.Module):
 
 #     return x
 
+# class InferenceNetwork(nn.Module):
+#   def __init__(self, env, exploration, hidden_dim=128, latent_dim=8):
+#     super(InferenceNetwork, self).__init__()
+
+#     self.exploration = exploration
+
+#     observation_space_size = 0
+#     if self.exploration:
+#       # print(env.observation_space.spaces["observation"].shape)
+#       observation_space_size = env.observation_space.spaces["observation"].shape[0]
+#     else:
+#       for key, value in env.observation_space.spaces.items():
+#         if key == "observation" or key == "instructions":
+#           observation_space_size += value.shape[0]
+
+#     # action_space_size = env.action_space.n
+#     # print(observation_space_size)
+#     transition_input_dim = 2 * observation_space_size + 1 + 1
+#     # print(f'obs size {2 * observation_space_size + action_space_size + 1}')
+
+#     self.linear1 = nn.Linear(transition_input_dim, hidden_dim)
+#     self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+#     self.linear3 = nn.Linear(hidden_dim, hidden_dim)
+
+#     # Get f_theta^mu, f_theta^sigma
+#     self.mu_head = nn.Linear(hidden_dim, latent_dim)
+#     self.sigma_head = nn.Linear(hidden_dim, latent_dim)
+
 class InferenceNetwork(nn.Module):
-  def __init__(self, env, exploration, hidden_dim=128, latent_dim=8):
+  def __init__(self, env, hidden_dim=128, latent_dim=8):
     super(InferenceNetwork, self).__init__()
 
-    self.exploration = exploration
-
-    observation_space_size = 0
-    if self.exploration:
-      # print(env.observation_space.spaces["observation"].shape)
-      observation_space_size = env.observation_space.spaces["observation"].shape[0]
-    else:
-      for key, value in env.observation_space.spaces.items():
-        if key == "observation" or key == "instructions":
-          observation_space_size += value.shape[0]
-
-    # action_space_size = env.action_space.n
-    # print(observation_space_size)
+    observation_space_size = env.observation_space.spaces["observation"].shape[0]
     transition_input_dim = 2 * observation_space_size + 1 + 1
-    # print(f'obs size {2 * observation_space_size + action_space_size + 1}')
 
     self.linear1 = nn.Linear(transition_input_dim, hidden_dim)
     self.linear2 = nn.Linear(hidden_dim, hidden_dim)
@@ -104,20 +119,22 @@ class InferenceNetwork(nn.Module):
 
 class DQNAgent(object):
   @classmethod
-  def from_config(cls, config, env, exploration):
-    dqn = DQNPolicy.from_config(config.get("policy"), env, exploration)
+  def from_config(cls, config, env):
+    dqn = DQNPolicy.from_config(config.get("policy"), env)
     replay_buffer = replay.ReplayBuffer.from_config(config.get("buffer"))
+    # For updated pearl buffer
+    replay_buffer_B = replay.ReplayBuffer.from_config(config.get("buffer"))
     optimizer_dqn = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
-    inference_net = InferenceNetwork(env, exploration)
+    inference_net = InferenceNetwork(env)
     optimizer_inference = optim.Adam(inference_net.parameters(), lr=config.get("learning_rate"))
     latent_dim = 8
 
-    return cls(dqn, replay_buffer, optimizer_dqn, optimizer_inference, config.get("sync_target_freq"),
+    return cls(dqn, replay_buffer, replay_buffer_B, optimizer_dqn, optimizer_inference, config.get("sync_target_freq"),
                config.get("min_buffer_size"), config.get("batch_size"),
-               config.get("update_freq"), config.get("max_grad_norm"), inference_net, exploration, latent_dim)
+               config.get("update_freq"), config.get("max_grad_norm"), inference_net, latent_dim)
 
-  def __init__(self, dqn, replay_buffer, optimizer_dqn, optimizer_inference, sync_freq,
-               min_buffer_size, batch_size, update_freq, max_grad_norm, inference_net, exploration, latent_dim=8):
+  def __init__(self, dqn, replay_buffer, replay_buffer_B, optimizer_dqn, optimizer_inference, sync_freq,
+               min_buffer_size, batch_size, update_freq, max_grad_norm, inference_net, latent_dim=8):
     """
     Args:
       dqn (DQNPolicy)
@@ -135,6 +152,7 @@ class DQNAgent(object):
     """
     self._dqn = dqn
     self._replay_buffer = replay_buffer
+    self._replay_buffer_B = replay_buffer_B
     self._optimizer_dqn = optimizer_dqn
     self._optimizer_inference = optimizer_inference
     self._sync_freq = sync_freq
@@ -143,8 +161,6 @@ class DQNAgent(object):
     self._update_freq = update_freq
     self._max_grad_norm = max_grad_norm
     self._updates = 0
-    self._exploration = exploration
-
 
     # Torch DQN losses
     self._dqn_losses = collections.deque(maxlen=100)
@@ -156,7 +172,7 @@ class DQNAgent(object):
     self._grad_norms = collections.deque(maxlen=100)
 
     self._inference_net = inference_net
-    self.z = None
+    self.w = None
     self.context_mu = None
     self.context_sigma_squared = None
     self._latent_dim = latent_dim
@@ -180,18 +196,19 @@ class DQNAgent(object):
 
       dist = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
 
-      self.z = dist.sample().reshape(1, -1)
+      self.w = dist.sample().reshape(1, -1)
     else:
       # Default to prior if no context
       dist = torch.distributions.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
-      self.z = dist.sample().reshape(1, -1)
-    return self.z
+      self.w = dist.sample().reshape(1, -1)
+    return self.w
 
-  def detach_z(self):
+  def detach_w(self):
     # removes z from computational graph so we don't backprop through
-    self.z = self.z.detach()
+    self.w = self.w.detach()
 
-  def update(self, experience, beta=1e-4):
+  # def update(self, experience, beta=1e-4):
+  def update(self, beta=1e-4):
     """Updates agent on this experience.
 
     Args:
@@ -222,100 +239,93 @@ class DQNAgent(object):
 
     #   self._optimizer_inference.step()
 
-    # TODO: NEED TO ENSURE THIS MAKES SENSE
+    # if len(self._replay_buffer) >= self._min_buffer_size:
+    #   if self._updates % self._update_freq == 0:
+    # Sample context and batch (Page 5 of PEARL)
 
+    # This is the RL batch b^mu
+    # experiences = self._replay_buffer.sample(self._batch_size)
+    experiences = self._replay_buffer.sample_if_possible(self._batch_size)
+
+    # Sample a min of 10 past steps of episode (if maxed out, all the past steps)
+    # context = None
+    # if len(self._replay_buffer._storage) < self.context_batch_size:
+    #   context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))[0]
+    # else:
+    #   context = self._replay_buffer.sample_context(self.context_batch_size)
+
+    # Sample context c^mu ~ S_C(B^mu)
+    # context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))[0]
+    context = self._replay_buffer_B.sample_context()
+    if context != []:
+      context = context[0]
+
+    # Update inference network G_lambda wrt lambdas
+    self._optimizer_inference.zero_grad()
+
+    batch_size = len(context)
+    states = [e.state for e in context]
+    actions = torch.tensor([e.action for e in context]).long()
+    next_states = [e.next_state for e in context]
+    rewards = torch.tensor([e.reward for e in context]).float()
+
+    context_list = []
+    for b in range(batch_size):
+      # index 0 corresponds to "observation", index 1 corresponds to "instructions"
+      # instructions returns numpy array, so we need to cast to Long tensor
+      # state = torch.cat((states[b][0], torch.from_numpy(states[b][1])))
+      # next_state = torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1])))
+      _state = states[b][0]
+      _next_state = next_states[b][0]
+      _action = actions[b].unsqueeze(dim=0).type(torch.LongTensor)
+      _reward = rewards[b].unsqueeze(dim=0).type(torch.LongTensor)
+
+      context_list.append(torch.cat((_state, _action, _reward, _next_state)))
+
+    # Convert to torch tensor of size batch_size x concatenated experience vector
+    if context != []:
+      context = torch.stack(context_list).type(torch.FloatTensor)
+    else:
+      context = None
+
+    # Sample w from posterior
+    w = self.infer_posterior(context)
+    posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
+
+    # Compute DQN loss L_DQN(b^mu, w)
+    dqn_loss = self._dqn.loss(experiences, np.ones(self._batch_size), w.detach())        
+    self._dqn_losses.append(dqn_loss)
+    self._losses.append(dqn_loss.item())
+
+    # Compute KL-divergence loss (might need to change)
+    prior = torch.distributions.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
+    # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
+
+    # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
+    # kl_loss = torch.sum(torch.stack(kl_losses))
+    kl_losses = torch.distributions.kl.kl_divergence(prior, posterior)
+    kl_loss = torch.sum(kl_losses)
+    
+    self._kl_lambda_losses.append(kl_loss.item())
+
+    total_loss = beta * kl_loss + dqn_loss
+    self._total_lambda_losses.append(total_loss.item())
+
+    total_loss.backward(retain_graph=True)
+    self._optimizer_inference.step()
+
+    ##########################################################################
+
+    # Update wrt thetas of DQN Q_theta->pi_theta for exploration
+
+    # Critic loss (if we were in actor-critic setup)
+    # loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())
+
+    # Update wrt thetas of DQN (meta-update for pi^exp_theta as in DREAM algo)
     if len(self._replay_buffer) >= self._min_buffer_size:
       if self._updates % self._update_freq == 0:
-        # Sample context and batch (Page 5 of PEARL)
-
-        # This is like batch b^i in 
-        experiences = self._replay_buffer.sample(self._batch_size)
-
-        # Sample a min of 5 past steps of episode (if maxed out, all the past steps)
-        # context = None
-        # if len(self._replay_buffer._storage) < self.context_batch_size:
-        #   context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))
-        # else:
-        #   context = self._replay_buffer.sample_context(self.context_batch_size)
-        context = self._replay_buffer.sample_context(len(self._replay_buffer._storage))[0]
-
-        # Update wrt phis
-        self._optimizer_inference.zero_grad()
-
-        batch_size = len(context)
-        states = [e.state for e in context]
-        actions = torch.tensor([e.action for e in context]).long()
-        next_states = [e.next_state for e in context]
-        rewards = torch.tensor([e.reward for e in context]).float()
-
-        context_list = []
-
-        for b in range(batch_size):
-          # index 0 corresponds to "observation", index 1 corresponds to "instructions"
-          # instructions returns numpy array, so we need to cast to Long tensor
-          # print(torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1]))))
-          state = None
-          next_state = None
-          if self._exploration:
-            # Only use observation
-            state = states[b][0]
-            next_state = next_states[b][0]
-          else:
-            # Use observation and instructions
-            state = torch.cat((states[b][0], torch.from_numpy(states[b][1])))
-            next_state = torch.cat((next_states[b][0], torch.from_numpy(next_states[b][1])))
-
-          # Actions
-          action = actions[b].unsqueeze(dim=0).type(torch.LongTensor)
-          reward = rewards[b].unsqueeze(dim=0).type(torch.LongTensor)
-
-          # Add experience to context
-          # print(state, action, reward, next_state)
-          # print(state.shape)
-          # print(next_state.shape)
-          context_list.append(torch.cat((state, action, reward, next_state)))
-
-        # Convert to torch tensor of size batch_size x concatenated experience vector
-        context = torch.stack(context_list).type(torch.FloatTensor)
-
-        # Sample z from posterior
-        z = self.infer_posterior(context)
-
-        posterior = torch.distributions.Normal(self.context_mu, self.context_sigma_squared)
-
-        # Compute DQN loss
-        # breakpoint()
-        dqn_loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())        
-        self._dqn_losses.append(dqn_loss)
-        self._losses.append(dqn_loss.item())
-
-        # Compute KL-divergence loss
-        prior = torch.distributions.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
-        # posteriors = [torch.distributions.Normal(mu, sigma) for mu, sigma in zip(torch.unbind(self.context_mu), torch.unbind(self.context_sigma_squared))]
-
-        # kl_losses = [torch.distributions.kl.kl_divergence(prior, posterior) for posterior in posteriors]
-        # kl_loss = torch.sum(torch.stack(kl_losses))
-        kl_losses = torch.distributions.kl.kl_divergence(prior, posterior)
-        kl_loss = torch.sum(kl_losses)
-        # print(f'kl loss {beta * kl_loss} dqn loss {dqn_loss}')
-        
-        self._kl_phi_losses.append(kl_loss.item())
-
-        total_loss = beta * kl_loss + dqn_loss
-        self._total_phi_losses.append(total_loss.item())
-
-        total_loss.backward(retain_graph=True)
-        self._optimizer_inference.step()
-
-        ##########################################################################
-
-        # # This is like batch b^i in 
-        # experiences = self._replay_buffer.sample(self._batch_size)
-        # Update wrt thetas of DQN
-
         self._optimizer_dqn.zero_grad()
-        # Critic loss (if we were in actor-critic setup)
-        # loss = self._dqn.loss(experiences, np.ones(self._batch_size), z.detach())
+
         loss = self._dqn_losses[-1]
         loss.backward()
         self._dqn_theta_losses.append(loss.item())
@@ -325,16 +335,17 @@ class DQNAgent(object):
             self._dqn.parameters(), self._max_grad_norm, norm_type=2)
         self._grad_norms.append(grad_norm)
         self._optimizer_dqn.step()
-
-        if self._updates % 1000 == 0:
-          print(f'Update phi loss: {self._total_phi_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
-
+      
+      # Update target DQN
       if self._updates % self._sync_freq == 0:
         self._dqn.sync_target()
 
+    if self._updates % 1000 == 0:
+      print(f'Update phi loss: {self._total_phi_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
+
     self._updates += 1
 
-  def act(self, state, z, prev_hidden_state=None, test=False):
+  def act(self, state, w, prev_hidden_state=None, test=False):
     """Given the current state, returns an action.
 
     Args:
@@ -344,7 +355,7 @@ class DQNAgent(object):
       action (int)
       hidden_state (object)
     """
-    return self._dqn.act(state, z, prev_hidden_state=prev_hidden_state, test=test)
+    return self._dqn.act(state, w, prev_hidden_state=prev_hidden_state, test=test)
 
   @property
   def stats(self):
@@ -399,7 +410,7 @@ class DQNAgent(object):
 # TODO(evzliu): Add Policy base class
 class DQNPolicy(nn.Module):
   @classmethod
-  def from_config(cls, config, env, exploration):
+  def from_config(cls, config, env):
     def embedder_factory():
       embedder_config = config.get("embedder")
       embed_type = embedder_config.get("type")
@@ -426,10 +437,10 @@ class DQNPolicy(nn.Module):
     epsilon_schedule = schedule.LinearSchedule.from_config(
         config.get("epsilon_schedule"))
     return cls(env.action_space.n, epsilon_schedule, config.get("test_epsilon"),
-               embedder_factory, exploration, config.get("discount"))
+               embedder_factory, config.get("discount"))
 
   def __init__(self, num_actions, epsilon_schedule, test_epsilon,
-               state_embedder_factory, exploration, gamma=0.99):
+               state_embedder_factory, gamma=0.99):
     """DQNPolicy should typically be constructed via from_config, and not
     through the constructor.
 
@@ -445,8 +456,8 @@ class DQNPolicy(nn.Module):
       gamma (float): discount factor
     """
     super().__init__()
-    self._Q = DuelingNetwork(num_actions, state_embedder_factory(), exploration)
-    self._target_Q = DuelingNetwork(num_actions, state_embedder_factory(), exploration)
+    self._Q = DuelingNetwork(num_actions, state_embedder_factory())
+    self._target_Q = DuelingNetwork(num_actions, state_embedder_factory())
     self._num_actions = num_actions
     self._epsilon_schedule = epsilon_schedule
     self._test_epsilon = test_epsilon
@@ -459,9 +470,9 @@ class DQNPolicy(nn.Module):
     self._min_q = collections.deque(maxlen=1000)
     self._losses = collections.defaultdict(lambda: collections.deque(maxlen=1000))
 
-    self.exploration = exploration
+    # self.exploration = exploration
 
-  def act(self, state, z, prev_hidden_state=None, test=False):
+  def act(self, state, w, prev_hidden_state=None, test=False):
     """
     Args:
       state (State)
@@ -477,7 +488,7 @@ class DQNPolicy(nn.Module):
     """
     del prev_hidden_state
 
-    q_values, hidden_state = self._Q([state], z, None)
+    q_values, hidden_state = self._Q([state], w, None)
     if test:
       epsilon = self._test_epsilon
     else:
@@ -515,7 +526,7 @@ class DQNPolicy(nn.Module):
     weights = torch.tensor(weights).float()
 
     # TODO(evzliu): Could more gracefully incorporate aux_losses
-    current_state_q_values, aux_losses = self._Q(states, z, None)
+    current_state_q_values, aux_losses = self._Q(states, w, None)
     if isinstance(aux_losses, dict):
       for name, loss in aux_losses.items():
         self._losses[name].append(loss.detach().cpu().data.numpy())
@@ -523,8 +534,8 @@ class DQNPolicy(nn.Module):
         1, actions.unsqueeze(1))
 
     # DDQN
-    best_actions = torch.max(self._Q(next_states, z, None)[0], 1)[1].unsqueeze(1)
-    next_state_q_values = self._target_Q(next_states, z, None)[0].gather(
+    best_actions = torch.max(self._Q(next_states, w, None)[0], 1)[1].unsqueeze(1)
+    next_state_q_values = self._target_Q(next_states, w, None)[0].gather(
         1, best_actions).squeeze(1)
     targets = rewards + self._gamma * (
       next_state_q_values * not_done_mask.float())
@@ -577,7 +588,7 @@ class DQNPolicy(nn.Module):
 class RecurrentDQNPolicy(DQNPolicy):
   """Implements a DQN policy that uses an RNN on the observations."""
 
-  def loss(self, experiences, weights, z):
+  def loss(self, experiences, weights, w):
     """Updates recurrent parameters from a batch of sequential experiences
 
     Minimizing the DQN loss:
@@ -629,7 +640,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     weights = torch.tensor(weights).float()
 
     # (batch_size, seq_len + 1, actions)
-    q_values, _ = self._Q(states, z, hidden_states)
+    q_values, _ = self._Q(states, w, hidden_states)
     current_q_values = q_values[:, :-1, :]
     current_q_values = current_q_values.reshape(batch_size * seq_len, -1)
     # (batch_size * seq_len, 1)
@@ -649,7 +660,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     next_q_values = next_q_values.reshape(batch_size * seq_len, -1)
     best_actions = torch.max(next_q_values, 1)[1].unsqueeze(1)
     # Using the same hidden states for target
-    target_q_values, _ = self._target_Q(next_states, z, next_hidden_states)
+    target_q_values, _ = self._target_Q(next_states, w, next_hidden_states)
     target_q_values = target_q_values.reshape(batch_size * seq_len, -1)
     next_state_q_values = target_q_values.gather(1, best_actions).squeeze(1)
     targets = rewards + self._gamma * (
@@ -657,12 +668,15 @@ class RecurrentDQNPolicy(DQNPolicy):
     targets.detach_()  # Don't backprop through targets
 
     td_error = current_state_q_values.squeeze() - targets
+
+    print(weights.shape)
+    
     weights = weights.unsqueeze(1) * mask.float()
     loss = (td_error ** 2).reshape(batch_size, seq_len) * weights
     loss = loss.sum() / mask.sum()  # masked mean
     return loss + sum(aux_losses.values())
 
-  def act(self, state, z, prev_hidden_state=None, test=False):
+  def act(self, state, w, prev_hidden_state=None, test=False):
     """
     Args:
       state (State)
@@ -676,7 +690,7 @@ class RecurrentDQNPolicy(DQNPolicy):
       int: action
       hidden_state (None)
     """
-    q_values, hidden_state = self._Q([[state]], z, prev_hidden_state)
+    q_values, hidden_state = self._Q([[state]], w, prev_hidden_state)
     if test:
       epsilon = self._test_epsilon
     else:
@@ -688,7 +702,7 @@ class RecurrentDQNPolicy(DQNPolicy):
 
 class DQN(nn.Module):
   """Implements the Q-function."""
-  def __init__(self, num_actions, state_embedder, exploration, latent_dim=8):
+  def __init__(self, num_actions, state_embedder, latent_dim=8):
     """
     Args:
       num_actions (int): the number of possible actions at each state
@@ -696,14 +710,14 @@ class DQN(nn.Module):
     """
     super(DQN, self).__init__()
     self._state_embedder = state_embedder
-    self.exploration = exploration
+    # self.exploration = exploration
 
-    if self.exploration:
-      self._q_values = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
-    else:
-      self._q_values = nn.Linear(self._state_embedder.embed_dim, num_actions)
+    # if self.exploration:
+    self._q_values = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
+    # else:
+    #   self._q_values = nn.Linear(self._state_embedder.embed_dim, num_actions)
 
-  def forward(self, states, z, hidden_states=None):
+  def forward(self, states, w, hidden_states=None):
     """Returns Q-values for each of the states.
 
     Args:
@@ -721,9 +735,9 @@ class DQN(nn.Module):
     # if z != None:
     #   state_embed = torch.cat((state_embed, z.detach()), dim=0)
     # return self._q_values(state_embed), hidden_state
-    if z != None:
+    if w != None:
       if state_embed.dim() == 2:
-        state_embed = torch.cat((state_embed, z.detach()), dim=1)
+        state_embed = torch.cat((state_embed, w.detach()), dim=1)
       else:
         # tile z to same dims as state_embedding
         # state_embedding 32 x 11 x 64
@@ -732,10 +746,10 @@ class DQN(nn.Module):
         x = list(state_embed.shape)
         x[-1] = 1
 
-        z = z.unsqueeze(0)
-        z = z.repeat(tuple(x))
+        w = w.unsqueeze(0)
+        w = w.repeat(tuple(x))
         
-        state_embed = torch.cat((state_embed, z.detach()), dim=-1)
+        state_embed = torch.cat((state_embed, w.detach()), dim=-1)
 
     return self._q_values(state_embed), hidden_state
 
@@ -746,29 +760,29 @@ class DuelingNetwork(DQN):
     # Q(s, a) = V(s) + A(s, a) - avg_a' A(s, a')
     Q(s, a, z) = V(s, z) + A(s, a, z) - avg_a' A(s, a', z)
   """
-  def __init__(self, num_actions, state_embedder, exploration, latent_dim=8):
-    super(DuelingNetwork, self).__init__(num_actions, state_embedder, exploration)
-    self.exploration = exploration
+  def __init__(self, num_actions, state_embedder, latent_dim=8):
+    super(DuelingNetwork, self).__init__(num_actions, state_embedder)
+    # self.exploration = exploration
 
     # HERE breakpoint()
-    print(self._state_embedder.embed_dim)
+    # print(self._state_embedder.embed_dim)
 
-    if self.exploration:
-      self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
-      self._A = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
-    else:
-      self._V = nn.Linear(self._state_embedder.embed_dim, 1)
-      self._A = nn.Linear(self._state_embedder.embed_dim, num_actions)
+    # if self.exploration:
+    self._V = nn.Linear(self._state_embedder.embed_dim + latent_dim, 1)
+    self._A = nn.Linear(self._state_embedder.embed_dim + latent_dim, num_actions)
+    # else:
+    # self._V = nn.Linear(self._state_embedder.embed_dim, 1)
+    # self._A = nn.Linear(self._state_embedder.embed_dim, num_actions)
 
-  def forward(self, states, z, hidden_states=None):
+  def forward(self, states, w, hidden_states=None):
+    # print(states)
     state_embedding, hidden_state = self._state_embedder(states, hidden_states)
     # breakpoint()
-    # concatenate state and task encoding
-    # print(f'state embedding {state_embedding.shape} z {z.shape}')
+    # concstate_embeddingtate_embedding.shape} z {z.shape}')
 
-    if z != None:
+    if w != None:
       if state_embedding.dim() == 2:
-        state_embedding = torch.cat((state_embedding, z.detach()), dim=1)
+        state_embedding = torch.cat((state_embedding, w.detach()), dim=1)
       else:
         # tile z to same dims as state_embedding
         # state_embedding 32 x 11 x 64
@@ -777,10 +791,10 @@ class DuelingNetwork(DQN):
         x = list(state_embedding.shape)
         x[-1] = 1
 
-        z = z.unsqueeze(0)
-        z = z.repeat(tuple(x))
+        w = w.unsqueeze(0)
+        w = w.repeat(tuple(x))
 
-        state_embedding = torch.cat((state_embedding, z.detach()), dim=-1)
+        state_embedding = torch.cat((state_embedding, w.detach()), dim=-1)
 
     V = self._V(state_embedding)
     advantage = self._A(state_embedding)
