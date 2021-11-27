@@ -162,13 +162,12 @@ class DQNAgent(object):
     self._max_grad_norm = max_grad_norm
     self._updates = 0
 
-    # Torch DQN losses
-    self._dqn_losses = collections.deque(maxlen=100)
+    # Tensor DQN loss
+    self._dqn_losses_tensors = collections.deque(maxlen=100)
     # Integer losses for everything else
-    self._dqn_theta_losses = collections.deque(maxlen=100)
-    self._kl_lambda_losses = collections.deque(maxlen=100)
-    self._total_lambda_losses = collections.deque(maxlen=100)
-    self._losses = collections.deque(maxlen=100)
+    self._dqn_losses = collections.deque(maxlen=100)
+    self._kl_losses = collections.deque(maxlen=100)
+    self._total_losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
 
     self._inference_net = inference_net
@@ -294,8 +293,8 @@ class DQNAgent(object):
 
     # Compute DQN loss L_DQN(b^mu, w)
     dqn_loss = self._dqn.loss(experiences, np.ones(self._batch_size), w.detach())        
-    self._dqn_losses.append(dqn_loss)
-    self._losses.append(dqn_loss.item())
+    self._dqn_losses_tensors.append(dqn_loss)
+    self._dqn_losses.append(dqn_loss.item())
 
     # Compute KL-divergence loss (might need to change)
     prior = torch.distributions.Normal(torch.zeros(self._latent_dim), torch.ones(self._latent_dim))
@@ -306,11 +305,11 @@ class DQNAgent(object):
     kl_losses = torch.distributions.kl.kl_divergence(prior, posterior)
     kl_loss = torch.sum(kl_losses)
     
-    self._kl_lambda_losses.append(kl_loss.item())
+    self._kl_losses.append(kl_loss.item())
 
     total_loss = beta * kl_loss + dqn_loss
     # print(f'kl loss {beta * kl_loss} dqn {dqn_loss}')
-    self._total_lambda_losses.append(total_loss.item())
+    self._total_losses.append(total_loss.item())
 
     total_loss.backward(retain_graph=True)
     self._optimizer_inference.step()
@@ -329,7 +328,7 @@ class DQNAgent(object):
 
         loss = self._dqn_losses[-1]
         loss.backward()
-        self._dqn_theta_losses.append(loss.item())
+        # self._dqn_theta_losses.append(loss.item())
 
         # clip according to the max allowed grad norm
         grad_norm = torch_utils.clip_grad_norm_(
@@ -340,7 +339,7 @@ class DQNAgent(object):
       # Update target DQN
       if self._updates % self._sync_freq == 0:
         self._dqn.sync_target()
-        print(f'Update phi loss: {self._total_lambda_losses[-1]}, theta loss: {self._dqn_theta_losses[-1]}')
+        print(f'DQN loss: {self._dqn_losses[-1]}, KLDiv loss: {self._kl_losses[-1]}, Total loss: {self._total_losses[-1]}')
 
     self._updates += 1
 
@@ -364,7 +363,9 @@ class DQNAgent(object):
       return np.mean(l)
 
     stats = self._dqn.stats
-    stats["loss"] = mean_with_default(self._losses, None)
+    stats["dqn_loss"] = mean_with_default(self._dqn_losses, None)
+    stats["kl_loss"] =  mean_with_default(self._kl_losses, None)
+    stats["total_loss"] = mean_with_default(self._total_losses, None)
     stats["grad_norm"] = mean_with_default(self._grad_norms, None)
     return {"DQN/{}".format(k): v for k, v in stats.items()}
 

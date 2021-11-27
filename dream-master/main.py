@@ -15,6 +15,7 @@ from envs import grid
 from envs import cooking
 from envs import city
 from envs import updated
+from envs import updated2
 import policy
 import relabel
 import rl
@@ -162,17 +163,19 @@ def run_episode_exploration(env, policy, agent, experience_observers=None, test=
     # Add experience to replay buffer B^mu
     agent._replay_buffer_B.add(experience)
 
-    for observer in experience_observers:
-      observer(experience)
-
     # Training if the buffer is sufficiently large
     min_buffer_size = 10
-    num_training_steps = 10
+    num_training_steps = 1
     # Only start training once we have enough data
     if len(agent._replay_buffer_B._storage) > min_buffer_size:
       # Train inference network, i.e. do updates (note, should only done during meta-training, not eval)
       for k in range(num_training_steps):
         agent.update()
+
+    # might need to put this below-->this updates instruction policy
+    for observer in experience_observers:
+      observer(experience)
+
 
     state = next_state
     hidden_state = next_hidden_state
@@ -205,7 +208,7 @@ def get_env_class(environment_type):
   elif environment_type == "cooking":
     return cooking.CookingGridEnv
   elif environment_type == "updated":
-    return updated.UpdatedGridEnv
+    return updated2.UpdatedTwoGridEnv
   elif environment_type == "miniworld_sign":
     # Dependencies on OpenGL, so only load if absolutely necessary
     from envs.miniworld import sign
@@ -352,6 +355,9 @@ def main():
 
     # New exploration environment
     exploration_env = create_env(step)
+
+    # Clear agent's buffer, reset B^mu
+    exploration_agent._replay_buffer_B.reset()
 
     # Exploration episode
     # We do updating of exploration policy's DQN in episode run

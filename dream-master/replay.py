@@ -30,6 +30,10 @@ class ReplayBuffer(object):
   def __len__(self):
     return len(self._storage)
 
+  def reset(self):
+    self._storage = []
+    self._next_idx = 0
+
   def add(self, experience):
     if self._next_idx >= len(self._storage):
       self._storage.append(experience)
