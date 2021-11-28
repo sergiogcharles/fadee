@@ -20,7 +20,7 @@ import rl
 import utils
 
 
-def run_episode(env, policy, experience_observers=None, test=False):
+def run_episode(env, policy, experience_observers=None, test=False, initial_hidden_state=None):
   """Runs a single episode on the environment following the policy.
 
   Args:
@@ -53,7 +53,8 @@ def run_episode(env, policy, experience_observers=None, test=False):
   state = env.reset()
   timestep = 0
   renders = [maybe_render(env, None, 0, timestep)]
-  hidden_state = None
+  # hidden_state = None
+  hidden_state = initial_hidden_state
   while True:
     action, next_hidden_state = policy.act(
         state, hidden_state, test=test)
@@ -242,10 +243,36 @@ def main():
             exploration_env, [], seed=max(0, step - 1)),
         exploration_agent)
 
+    
     # Needed to keep references to the trajectory and index for reward labeling
     for index, exp in enumerate(exploration_episode):
       exploration_agent.update(
           relabel.TrajectoryExperience(exp, exploration_episode, index))
+
+    min_contrastive_steps = 10000
+    num_positive_samples = 5
+    positive_samples = []
+
+    if step >= min_contrastive_steps:
+      total_contrastive_loss = 0
+
+      # Positive sampling for contrastive trajectory embedding method
+      for i in range(num_positive_samples):
+        index = np.random.randint(len(hidden_state_buffer)):
+        sampled_hidden_state = hidden_state_buffer[index]
+        positive_samples.append(sampled_hidden_state)
+
+        # Random starting state
+        exploration_env = create_env(step, random_start=True)
+        augmented_episode, _, _ = run_episode(
+            # Exploration episode gets ignored
+            env_class.instruction_wrapper()(
+                exploration_env, [], seed=max(0, step - 1)),
+            exploration_agent, initial_hidden_state=sampled_hidden_state)
+        
+        _, losses = trajectory_embedder([augmented_episode])
+        total_contrastive_loss += losses("transition_context_loss")
+      instruction_agent.update_contrastive(total_contrastive_loss)
 
     exploration_steps += len(exploration_episode)
     exploration_lengths.append(len(exploration_episode))

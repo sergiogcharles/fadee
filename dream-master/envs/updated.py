@@ -67,6 +67,7 @@ class CityGridEnv(grid.GridEnv):
     - The episode ends after a fixed number of steps.
     - Different env_ids correspond to different bus destination permutations.
     """
+    _random_start = False
 
     # Location of the bus stops and the color to render them
     _bus_sources = [
@@ -92,9 +93,10 @@ class CityGridEnv(grid.GridEnv):
     _train_ids = None
     _test_ids = None
 
-    def __init__(self, env_id, wrapper, max_steps=10):
+    def __init__(self, env_id, wrapper, max_steps=10, random_start=False):
         super().__init__(env_id, wrapper, max_steps=max_steps,
                          width=self._width, height=self._height)
+        self._random_start = random_start
 
     @classmethod
     def instruction_wrapper(cls):
@@ -116,7 +118,10 @@ class CityGridEnv(grid.GridEnv):
 
     def _place_objects(self):
         super()._place_objects()
-        self._agent_pos = np.array([2, 2])
+        if self._random_start:
+            self._agent_pos = np.array([np.random.randint(self._width), np.random.randint(self._height)])
+        else:
+            self._agent_pos = np.array([2, 2])
 
         destinations = self._bus_permutations[
                 self.env_id[0] % len(self._bus_permutations)]

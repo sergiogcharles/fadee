@@ -50,6 +50,20 @@ class DQNAgent(object):
     self._losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
 
+  def update_contrastive(self, loss):
+    # self._losses.append(loss.item())
+    # clip according to the max allowed grad norm
+    grad_norm = torch_utils.clip_grad_norm_(
+        self._dqn.parameters(), self._max_grad_norm, norm_type=2)
+
+    self._grad_norms.append(grad_norm)
+    self._optimizer.step()
+
+    if self._updates % self._sync_freq == 0:
+      self._dqn.sync_target()
+
+    self._updates += 1
+
   def update(self, experience):
     """Updates agent on this experience.
 

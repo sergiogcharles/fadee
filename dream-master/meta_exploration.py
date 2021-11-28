@@ -33,7 +33,7 @@ class MetaExplorationEnv(abc.ABC, gym.Env):
     self._wrapper = wrapper
 
   @classmethod
-  def create_env(cls, seed, test=False, wrapper=None):
+  def create_env(cls, seed, test=False, wrapper=None, random_start=False):
     """Randomly creates an environment instance.
 
     Args:
@@ -54,7 +54,7 @@ class MetaExplorationEnv(abc.ABC, gym.Env):
     train_ids, test_ids = cls.env_ids()
     split = test_ids if test else train_ids
     env_id = split[random.randint(len(split))]
-    return cls(env_id, wrapper)
+    return cls(env_id, wrapper, random_start=random_start)
 
   @abc.abstractmethod
   def env_ids(cls):
