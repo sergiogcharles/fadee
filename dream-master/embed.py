@@ -121,6 +121,7 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     self._penalty = penalty
     self._use_ids = True
     self._embed_dim = embed_dim
+    self._hidden_state_transform = nn.Linear(embed_dim, embed_dim)
 
   def use_ids(self, use):
     self._use_ids = use
@@ -203,8 +204,11 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     """
 
     #pad the first state, logically equiv. to the previous (commented out) code block
+    transition_embed = self._hidden_state_transform(transition_embed)
     transition_embed = transition_embed.reshape(batch_size, max_len, self._embed_dim)
-    all_transition_contexts = torch.cat((torch.zeros(batch_size ,1, self._embed_dim), transition_embed), dim=1)
+    a = torch.zeros(batch_size, self._embed_dim)
+    a = self._hidden_state_transform(a)
+    all_transition_contexts = torch.cat((a.reshape(batch_size ,1, self._embed_dim), transition_embed), dim=1)
 
     """
     print(f"the actual embedding is: {all_transition_contexts.shape}")
@@ -737,9 +741,9 @@ class RecurrentStateEmbedder(Embedder):
     embeddings = torch.cat(embeddings, 1).squeeze(1)
 
     # Detach to save GPU memory.
-    #detached_hidden_state = (hidden_state[0].detach(), hidden_state[1].detach())
+    detached_hidden_state = (hidden_state[0].detach(), hidden_state[1].detach())
     #hidden_state = torch.cat((hidden_state[0], hidden_state[1]), dim=1)
-    return embeddings, hidden_state
+    return embeddings, detached_hidden_state
 
   @classmethod
   def from_config(cls, config, env):

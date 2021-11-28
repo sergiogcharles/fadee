@@ -64,7 +64,7 @@ class DQNAgent(object):
 
         self._optimizer.zero_grad()
         loss = self._dqn.loss(experiences, np.ones(self._batch_size))
-        loss.backward(retain_graph=True)
+        loss.backward()
         self._losses.append(loss.item())
 
         # clip according to the max allowed grad norm
