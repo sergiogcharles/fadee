@@ -169,6 +169,7 @@ class DQNAgent(object):
     self._kl_losses = collections.deque(maxlen=100)
     self._total_losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
+    self._grad_norms_inference = collections.deque(maxlen=100)
 
     self._inference_net = inference_net
     self.w = None
@@ -312,6 +313,9 @@ class DQNAgent(object):
     self._total_losses.append(total_loss.item())
 
     total_loss.backward(retain_graph=True)
+    grad_norm_inference = torch_utils.clip_grad_norm_(
+            self._inference_net.parameters(), self._max_grad_norm, norm_type=2)
+    self._grad_norms_inference.append(grad_norm_inference)
     self._optimizer_inference.step()
 
     ##########################################################################
@@ -367,6 +371,7 @@ class DQNAgent(object):
     stats["kl_loss"] =  mean_with_default(self._kl_losses, None)
     stats["total_loss"] = mean_with_default(self._total_losses, None)
     stats["grad_norm"] = mean_with_default(self._grad_norms, None)
+    stats["grad_norm_inference"] = mean_with_default(self._grad_norms_inference, None)
     return {"DQN/{}".format(k): v for k, v in stats.items()}
 
   def state_dict(self):
