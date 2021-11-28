@@ -95,7 +95,8 @@ def get_env_class(environment_type):
   elif environment_type == "cooking":
     return cooking.CookingGridEnv
   elif environment_type == "updated":
-    return updated.UpdatedGridEnv
+    # return updated.UpdatedGridEnv
+    return updated.CityGridEnv
   elif environment_type == "miniworld_sign":
     # Dependencies on OpenGL, so only load if absolutely necessary
     from envs.miniworld import sign
@@ -251,28 +252,57 @@ def main():
 
     min_contrastive_steps = 10000
     num_positive_samples = 5
-    positive_samples = []
+    num_negative_samples = 5
 
     if step >= min_contrastive_steps:
-      total_contrastive_loss = 0
+      positive_samples = []
+      negative_samples = []
 
-      # Positive sampling for contrastive trajectory embedding method
+      positive_contrastive_loss = []
+
+      # Positive examples for contrastive trajectory embedding method
       for i in range(num_positive_samples):
-        index = np.random.randint(len(hidden_state_buffer)):
+        index = np.random.randint(len(hidden_state_buffer))
         sampled_hidden_state = hidden_state_buffer[index]
         positive_samples.append(sampled_hidden_state)
 
         # Random starting state
         exploration_env = create_env(step, random_start=True)
-        augmented_episode, _, _ = run_episode(
+        augmented_episode, _, hidden_state_buffer_augmented = run_episode(
             # Exploration episode gets ignored
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, step - 1)),
             exploration_agent, initial_hidden_state=sampled_hidden_state)
         
         _, losses = trajectory_embedder([augmented_episode])
-        total_contrastive_loss += losses("transition_context_loss")
-      instruction_agent.update_contrastive(total_contrastive_loss)
+        positive_contrastive_loss.append(losses["transition_context_loss"])
+      
+      positive_contrastive_loss = torch.stack(positive_contrastive_loss)
+      positive_contrastive_loss = positive_contrastive_loss.mean(0)
+      instruction_agent.update_contrastive(positive_contrastive_loss)
+
+      negative_contrastive_loss = []
+      # Negative examples
+      for i in range(num_negative_samples):
+        index = np.random.randint(len(hidden_state_buffer))
+        sampled_hidden_state = hidden_state_buffer[index]
+        negative_samples.append(sampled_hidden_state)
+
+        # Random starting state
+        # Get different environment at each sample
+        exploration_env = create_env(int(step * num_negative_samples + 1e6 + i), random_start=True)
+        augmented_episode, _, hidden_state_buffer_augmented = run_episode(
+            # Exploration episode gets ignored
+            env_class.instruction_wrapper()(
+                exploration_env, [], seed=max(0, step - 1)),
+            exploration_agent, initial_hidden_state=sampled_hidden_state)
+        
+        _, losses = trajectory_embedder([augmented_episode])
+        negative_contrastive_loss.append(losses["transition_context_loss"])
+
+      negative_contrastive_loss = torch.stack(negative_contrastive_loss)
+      negative_contrastive_loss = negative_contrastive_loss.mean(0)
+      instruction_agent.update_contrastive(positive_contrastive_loss - negative_contrastive_loss)
 
     exploration_steps += len(exploration_episode)
     exploration_lengths.append(len(exploration_episode))
@@ -283,7 +313,7 @@ def main():
 
     if step % 2 == 0:
       trajectory_embedder.use_ids(False)
-    episode, _ = run_episode(
+    episode, _, _ = run_episode(
         instruction_env, instruction_agent,
         experience_observers=[instruction_agent.update])
     instruction_steps += len(episode)
@@ -340,7 +370,7 @@ def main():
       trajectory_embedder.use_ids(False)
       for test_index in tqdm.tqdm(range(100)):
         exploration_env = create_env(test_index, test=True)
-        exploration_episode, exploration_render = run_episode(
+        exploration_episode, exploration_render, _ = run_episode(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, test_index - 1), test=True),
             exploration_agent, test=True)
@@ -348,7 +378,7 @@ def main():
 
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=test_index + 1, test=True)
-        episode, render = run_episode(
+        episode, render, _ = run_episode(
             instruction_env, instruction_agent, test=True)
         test_rewards.append(sum(exp.reward for exp in episode))
 
@@ -380,14 +410,14 @@ def main():
         exploration_env = create_env(train_index)
         # Test flags here only refer to making agent act with test flag and
         # not test split environments
-        exploration_episode, exploration_render = run_episode(
+        exploration_episode, exploration_render, _ = run_episode(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, train_index - 1)),
             exploration_agent, test=True)
 
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=train_index + 1)
-        episode, render = run_episode(
+        episode, render, _ = run_episode(
             instruction_env, instruction_agent, test=True)
 
         frames = [frame.image() for frame in render]

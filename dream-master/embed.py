@@ -120,6 +120,8 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     self._transition_output_layer = nn.Linear(128, embed_dim)
     self._penalty = penalty
     self._use_ids = True
+    self._embed_dim = embed_dim
+    self._hidden_state_transform = nn.Linear(embed_dim, embed_dim)
 
   def use_ids(self, use):
     self._use_ids = use
@@ -145,11 +147,16 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     # trajectories: (batch_size, max_len)
     # mask: (batch_size, max_len)
     padded_trajectories, mask = utils.pad(trajectories)
+    batch_size = len(padded_trajectories)
+    max_len = len(padded_trajectories[0])
     sequence_lengths = torch.tensor([len(traj) for traj in trajectories]).long()
 
     # (batch_size * max_len, embed_dim)
-    transition_embed = self._transition_embedder(
-        [exp for traj in padded_trajectories for exp in traj])
+    # transition_embed = self._transition_embedder(
+        # [exp for traj in padded_trajectories for exp in traj])
+    
+    transition_embed = [exp.next_agent_state[1].squeeze(0) for traj in padded_trajectories for exp in traj]
+    transition_embed = torch.stack(transition_embed)
 
     # pack_padded_sequence relies on the default tensor type not
     # being a CUDA tensor.
@@ -157,35 +164,45 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     # tensor type
     torch.set_default_tensor_type(torch.FloatTensor)
     # Sorted only required for ONNX
-    padded_transitions = nn.utils.rnn.pack_padded_sequence(
-        transition_embed.reshape(mask.shape[0], mask.shape[1], -1),
-        sequence_lengths, batch_first=True, enforce_sorted=False)
-    if torch.cuda.is_available():
-      torch.set_default_tensor_type(torch.cuda.FloatTensor)
+    # padded_transitions = nn.utils.rnn.pack_padded_sequence(
+    #     transition_embed.reshape(mask.shape[0], mask.shape[1], -1),
+    #     sequence_lengths, batch_first=True, enforce_sorted=False)
+    # if torch.cuda.is_available():
+    #   torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
-    transition_hidden_states = self._transition_lstm(padded_transitions)[0]
-    # (batch_size, max_len, hidden_dim)
-    transition_hidden_states, hidden_lengths = nn.utils.rnn.pad_packed_sequence(
-        transition_hidden_states, batch_first=True)
-    initial_hidden_states = torch.zeros(
-        transition_hidden_states.shape[0], 1,
-        transition_hidden_states.shape[-1])
-    # (batch_size, max_len + 1, hidden_dim)
-    transition_hidden_states = torch.cat(
-        (initial_hidden_states, transition_hidden_states), 1)
-    transition_hidden_states = F.relu(
-        self._transition_fc_layer(transition_hidden_states))
-    # (batch_size, max_len + 1, embed_dim)
-    all_transition_contexts = self._transition_output_layer(
-        transition_hidden_states)
+    # transition_hidden_states = self._transition_lstm(padded_transitions)[0]
+    # # (batch_size, max_len, hidden_dim)
+    # transition_hidden_states, hidden_lengths = nn.utils.rnn.pad_packed_sequence(
+    #     transition_hidden_states, batch_first=True)
+    # initial_hidden_states = torch.zeros(
+    #     transition_hidden_states.shape[0], 1,
+    #     transition_hidden_states.shape[-1])
+    # # (batch_size, max_len + 1, hidden_dim)
+    # transition_hidden_states = torch.cat(
+    #     (initial_hidden_states, transition_hidden_states), 1)
+    # transition_hidden_states = F.relu(
+    #     self._transition_fc_layer(transition_hidden_states))
+    # # (batch_size, max_len + 1, embed_dim)
+    # all_transition_contexts = self._transition_output_layer(
+    #     transition_hidden_states)
+
+    transition_embed = self._hidden_state_transform(transition_embed)
+    transition_embed = transition_embed.reshape(batch_size, max_len, self._embed_dim)
+
+    a = torch.zeros(batch_size, self._embed_dim)
+    a = self._hidden_state_transform(a)
+    all_transition_contexts = torch.cat((a.reshape(batch_size, 1, self._embed_dim), transition_embed), dim=1)
 
     # (batch_size, 1, embed_dim)
     # Don't need to subtract 1 off of hidden_lengths as transition_contexts is
     # padded with init hidden state at the beginning.
-    indices = hidden_lengths.unsqueeze(-1).unsqueeze(-1).expand(
-        hidden_lengths.shape[0], 1, all_transition_contexts.shape[2]).to(
-            all_transition_contexts.device)
-    transition_contexts = all_transition_contexts.gather(1, indices).squeeze(1)
+    # indices = hidden_lengths.unsqueeze(-1).unsqueeze(-1).expand(
+    #     hidden_lengths.shape[0], 1, all_transition_contexts.shape[2]).to(
+    #         all_transition_contexts.device)
+    # transition_contexts = all_transition_contexts.gather(1, indices).squeeze(1)
+
+    transition_contexts = [traj[-1].next_agent_state[1].squeeze(0) for traj in trajectories]
+    transition_contexts = torch.stack(transition_contexts)
 
     # (batch_size, embed_dim)
     id_contexts = self._id_embedder(

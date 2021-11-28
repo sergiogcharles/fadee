@@ -48,10 +48,12 @@ class DQNAgent(object):
     self._updates = 0
 
     self._losses = collections.deque(maxlen=100)
+    self._contrastive_losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
 
   def update_contrastive(self, loss):
-    # self._losses.append(loss.item())
+    loss.backward(retain_graph=True)
+    self._contrastive_losses.append(loss.item())
     # clip according to the max allowed grad norm
     grad_norm = torch_utils.clip_grad_norm_(
         self._dqn.parameters(), self._max_grad_norm, norm_type=2)
