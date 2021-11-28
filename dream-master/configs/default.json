@@ -1,5 +1,5 @@
 {
-  "environment": "updated",
+  "environment": "distraction",
   "instruction_agent": {
     "type": "learned",
     "policy": {

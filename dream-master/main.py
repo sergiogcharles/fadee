@@ -18,6 +18,7 @@ import policy
 import relabel
 import rl
 import utils
+import pickle
 
 
 def run_episode(env, policy, experience_observers=None, test=False):
@@ -69,7 +70,7 @@ def run_episode(env, policy, experience_observers=None, test=False):
     state = next_state
     hidden_state = next_hidden_state
     if done:
-      return episode, renders
+      return episode, renders, hidden_state
 
 
 def get_env_class(environment_type):
@@ -86,11 +87,13 @@ def get_env_class(environment_type):
   elif environment_type == "distraction":
     return city.DistractionGridEnv
   elif environment_type == "map":
-    return city.MapGridEnv
+    return updated.MapGridEnv
+  elif environment_type == "largeMap":
+    return updated.LargeMapGridEnv
   elif environment_type == "cooking":
     return cooking.CookingGridEnv
   elif environment_type == "updated":
-    return updated.UpdatedTwoGridEnv
+    return updated.UpdatedGridEnv
   elif environment_type == "miniworld_sign":
     # Dependencies on OpenGL, so only load if absolutely necessary
     from envs.miniworld import sign
@@ -232,7 +235,7 @@ def main():
   instruction_steps = 0
   for step in tqdm.tqdm(range(1000000)):
     exploration_env = create_env(step)
-    exploration_episode, _ = run_episode(
+    exploration_episode, _, _ = run_episode(
         # Exploration episode gets ignored
         env_class.instruction_wrapper()(
             exploration_env, [], seed=max(0, step - 1)),
@@ -252,7 +255,7 @@ def main():
 
     if step % 2 == 0:
       trajectory_embedder.use_ids(False)
-    episode, _ = run_episode(
+    episode, _, _ = run_episode(
         instruction_env, instruction_agent,
         experience_observers=[instruction_agent.update])
     instruction_steps += len(episode)
@@ -307,9 +310,30 @@ def main():
       test_rewards = []
       test_exploration_lengths = []
       trajectory_embedder.use_ids(False)
+
+      emebeddings_dir = os.path.join(exp_dir, "embeddings", str(step))
+      os.makedirs(emebeddings_dir, exist_ok=True)
+
+      env_embeddings = {}
+      for test_index in tqdm.tqdm(range(1000)):
+        exploration_env = create_env(test_index, test=True)
+        exploration_episode, exploration_render, hidden = run_episode(
+            env_class.instruction_wrapper()(
+                exploration_env, [], seed=max(0, test_index - 1), test=True),
+            exploration_agent, test=True)
+        test_exploration_lengths.append(len(exploration_episode))
+        curr = env_embeddings.get(exploration_env._env_id[0], [])
+        curr.append(hidden)
+        env_embeddings[exploration_env._env_id[0]] = curr
+        instruction_env = env_class.instruction_wrapper()(
+            exploration_env, exploration_episode, seed=test_index + 1, test=True)
+        episode, render, _ = run_episode(
+            instruction_env, instruction_agent, test=True)
+      pickle.dump(env_embeddings, open(os.path.join(emebeddings_dir, "env_embeddings.pickle"), "wb"))
+
       for test_index in tqdm.tqdm(range(100)):
         exploration_env = create_env(test_index, test=True)
-        exploration_episode, exploration_render = run_episode(
+        exploration_episode, exploration_render, _ = run_episode(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, test_index - 1), test=True),
             exploration_agent, test=True)
@@ -317,7 +341,7 @@ def main():
 
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=test_index + 1, test=True)
-        episode, render = run_episode(
+        episode, render, _ = run_episode(
             instruction_env, instruction_agent, test=True)
         test_rewards.append(sum(exp.reward for exp in episode))
 
@@ -349,14 +373,14 @@ def main():
         exploration_env = create_env(train_index)
         # Test flags here only refer to making agent act with test flag and
         # not test split environments
-        exploration_episode, exploration_render = run_episode(
+        exploration_episode, exploration_render, _ = run_episode(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, train_index - 1)),
             exploration_agent, test=True)
 
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=train_index + 1)
-        episode, render = run_episode(
+        episode, render, _ = run_episode(
             instruction_env, instruction_agent, test=True)
 
         frames = [frame.image() for frame in render]
