@@ -47,6 +47,8 @@ def run_episode(env, policy, experience_observers=None, test=False):
   if experience_observers is None:
     experience_observers = []
 
+  hidden_state_buffer = []
+
   episode = []
   state = env.reset()
   timestep = 0
@@ -63,13 +65,16 @@ def run_episode(env, policy, experience_observers=None, test=False):
         state, action, reward, next_state, done, info, hidden_state,
         next_hidden_state)
     episode.append(experience)
+    
     for observer in experience_observers:
       observer(experience)
 
     state = next_state
     hidden_state = next_hidden_state
+
+    hidden_state_buffer.append(hidden_state)
     if done:
-      return episode, renders
+      return episode, renders, hidden_state_buffer
 
 
 def get_env_class(environment_type):
@@ -232,7 +237,7 @@ def main():
   instruction_steps = 0
   for step in tqdm.tqdm(range(1000000)):
     exploration_env = create_env(step)
-    exploration_episode, _ = run_episode(
+    exploration_episode, _, hidden_state_buffer = run_episode(
         # Exploration episode gets ignored
         env_class.instruction_wrapper()(
             exploration_env, [], seed=max(0, step - 1)),
