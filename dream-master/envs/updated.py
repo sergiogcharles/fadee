@@ -17,8 +17,8 @@ class InstructionWrapper(meta_exploration.InstructionWrapper):
             R(s, a) = -0.3 if s != goal
                     = 1      otherwise
     """
-    GOALS = [np.array((0, 0)), np.array((8, 8)),
-             np.array((0, 8)), np.array((8, 0))]
+    GOALS = [np.array((0, 0)), np.array((4, 4)),
+             np.array((0, 4)), np.array((4, 0))]
 
     def _instruction_observation_space(self):
         return gym.spaces.Box(
@@ -256,7 +256,7 @@ class UpdatedGridEnv(grid.GridEnv):
 
     def text_description(self):
         return "bus grid"
-    
+
     def _observation_space(self):
         low, high, dtype = super()._observation_space()
         # add dim for map
@@ -270,7 +270,7 @@ class UpdatedGridEnv(grid.GridEnv):
         map_info = [0]
         if self.env_id[0] < 24:
             if np.array_equal(self.agent_pos, self._map_pos):
-                map_info = [self.env_id[0] + 1]  
+                map_info = [self.env_id[0] + 1]
         return np.concatenate((obs, map_info), 0)
 
     def _place_objects(self):
@@ -372,7 +372,7 @@ class UpdatedTwoGridEnv(grid.GridEnv):
 
     def text_description(self):
         return "bus grid"
-    
+
     def _observation_space(self):
         low, high, dtype = super()._observation_space()
         # add dim for map
@@ -393,7 +393,7 @@ class UpdatedTwoGridEnv(grid.GridEnv):
                 sign_info = [1]
         else:
             if np.array_equal(self.agent_pos, self._sign_pos):
-                sign_info = [2]  
+                sign_info = [2]
         return np.concatenate((obs, map_info, sign_info), 0)
 
     def _place_objects(self):
@@ -424,5 +424,3 @@ class UpdatedTwoGridEnv(grid.GridEnv):
         else:
             image.draw_rectangle(self._sign_pos, 0.4, "black")
         return image
-            
-        

@@ -68,6 +68,8 @@ def run_episode(env, policy, experience_observers=None, test=False):
 
     state = next_state
     hidden_state = next_hidden_state
+    #print(hidden_state[1].shape)
+    #print(hidden_state[0].shape)
     if done:
       return episode, renders
 
@@ -86,7 +88,7 @@ def get_env_class(environment_type):
   elif environment_type == "distraction":
     return city.DistractionGridEnv
   elif environment_type == "map":
-    return city.MapGridEnv
+    return updated.MapGridEnv
   elif environment_type == "cooking":
     return cooking.CookingGridEnv
   elif environment_type == "updated":

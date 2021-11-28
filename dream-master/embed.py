@@ -120,6 +120,7 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     self._transition_output_layer = nn.Linear(128, embed_dim)
     self._penalty = penalty
     self._use_ids = True
+    self._embed_dim = embed_dim
 
   def use_ids(self, use):
     self._use_ids = use
@@ -145,11 +146,31 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     # trajectories: (batch_size, max_len)
     # mask: (batch_size, max_len)
     padded_trajectories, mask = utils.pad(trajectories)
+    batch_size = len(padded_trajectories)
+    max_len = len(padded_trajectories[0])
     sequence_lengths = torch.tensor([len(traj) for traj in trajectories]).long()
+
+    #NEW hidden state based trajectory encoding
+    transition_embed = [exp.next_agent_state[1].squeeze(0) for traj in padded_trajectories for exp in traj]
+    transition_embed = torch.stack(transition_embed)
+
+    """
+    print(f"using hidden state, our initial embed dimension is: {transition_embed.shape}")
 
     # (batch_size * max_len, embed_dim)
     transition_embed = self._transition_embedder(
         [exp for traj in padded_trajectories for exp in traj])
+
+    #this is going to change
+
+    print(f"before a bunch of processing our original (non-hidden-state) embedding is: {transition_embed.shape}")
+    """
+
+    #all the same till here
+
+
+    """
+    #this code block takes a (10, 64) tensor and changes it into a (1, 11, 64) tensor
 
     # pack_padded_sequence relies on the default tensor type not
     # being a CUDA tensor.
@@ -179,6 +200,18 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
     all_transition_contexts = self._transition_output_layer(
         transition_hidden_states)
 
+    """
+
+    #pad the first state, logically equiv. to the previous (commented out) code block
+    transition_embed = transition_embed.reshape(batch_size, max_len, self._embed_dim)
+    all_transition_contexts = torch.cat((torch.zeros(batch_size ,1, self._embed_dim), transition_embed), dim=1)
+
+    """
+    print(f"the actual embedding is: {all_transition_contexts.shape}")
+    """
+
+
+    """
     # (batch_size, 1, embed_dim)
     # Don't need to subtract 1 off of hidden_lengths as transition_contexts is
     # padded with init hidden state at the beginning.
@@ -186,10 +219,17 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
         hidden_lengths.shape[0], 1, all_transition_contexts.shape[2]).to(
             all_transition_contexts.device)
     transition_contexts = all_transition_contexts.gather(1, indices).squeeze(1)
+    """
+
+    #need to grab the last part of all_transition_contexts for transition_contexts
+    transition_contexts = [traj[-1].next_agent_state[1].squeeze(0) for traj in trajectories]
+    transition_contexts = torch.stack(transition_contexts)
+
 
     # (batch_size, embed_dim)
     id_contexts = self._id_embedder(
         torch.tensor([traj[0].state.env_id for traj in trajectories]))
+
 
     # don't mask the initial hidden states (batch_size, max_len + 1)
     mask = torch.cat(
@@ -697,8 +737,9 @@ class RecurrentStateEmbedder(Embedder):
     embeddings = torch.cat(embeddings, 1).squeeze(1)
 
     # Detach to save GPU memory.
-    detached_hidden_state = (hidden_state[0].detach(), hidden_state[1].detach())
-    return embeddings, detached_hidden_state
+    #detached_hidden_state = (hidden_state[0].detach(), hidden_state[1].detach())
+    #hidden_state = torch.cat((hidden_state[0], hidden_state[1]), dim=1)
+    return embeddings, hidden_state
 
   @classmethod
   def from_config(cls, config, env):
