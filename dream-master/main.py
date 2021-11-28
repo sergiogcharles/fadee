@@ -76,7 +76,6 @@ def run_episode(env, policy, experience_observers=None, test=False):
     if done:
       return episode, renders, hidden_state_buffer
 
-
 def get_env_class(environment_type):
   """Returns the environment class specified by the type.
 
