@@ -326,7 +326,7 @@ class DQNAgent(object):
       if self._updates % self._update_freq == 0:
         self._optimizer_dqn.zero_grad()
 
-        loss = self._dqn_losses[-1]
+        loss = self._dqn_losses_tensors[-1]
         loss.backward()
         # self._dqn_theta_losses.append(loss.item())
 

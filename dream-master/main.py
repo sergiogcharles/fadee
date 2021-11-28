@@ -357,7 +357,8 @@ def main():
     exploration_env = create_env(step)
 
     # Clear agent's buffer, reset B^mu
-    exploration_agent._replay_buffer_B.reset()
+    if step % 1000:
+      exploration_agent._replay_buffer_B.reset()
 
     # Exploration episode
     # We do updating of exploration policy's DQN in episode run
