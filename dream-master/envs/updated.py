@@ -21,7 +21,7 @@ class InstructionWrapper(meta_exploration.InstructionWrapper):
     #          np.array((0, 4)), np.array((4, 0))]
     GOALS = [np.array((0, 0)), np.array((8, 8)),
              np.array((0, 8)), np.array((8, 0)), 
-             np.array((4, 0)), np.array((4, 8))]]
+             np.array((4, 0)), np.array((4, 8))]
 
     def _instruction_observation_space(self):
         return gym.spaces.Box(
