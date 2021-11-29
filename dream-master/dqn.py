@@ -50,16 +50,46 @@ class DQNAgent(object):
     self._losses = collections.deque(maxlen=100)
     self._contrastive_losses = collections.deque(maxlen=100)
     self._grad_norms = collections.deque(maxlen=100)
+    self._contrastive_grad_norms = collections.deque(maxlen=100)
 
   def update_contrastive(self, loss):
     loss.backward()
     self._contrastive_losses.append(loss.item())
     # clip according to the max allowed grad norm
-    grad_norm = torch_utils.clip_grad_norm_(
+    #  self._Q, self._target_Q
+
+    # want to freeze
+    #  self._V = nn.Linear(self._state_embedder.embed_dim, 1)
+    # self._A = nn.Linear(self._state_embedder.embed_dim, num_actions)
+
+    # want to update self._state_embedder
+
+    # for param in self._Q._V:
+    #   param.requires_grad = False
+
+    # Turn off grad for all params but state embedder
+    for param in self._dqn._Q.parameters():
+      param.requires_grad = False
+    for param in self._dqn._target_Q.parameters():
+      param.requires_grad = False
+    
+    # Turn on state embedder params (since we just indirectly turned them off)
+    for param in self._dqn._Q._state_embedder.parameters():
+      param.requires_grad = True
+    for param in self._dqn._target_Q._state_embedder.parameters():
+      param.requires_grad = True
+    
+    contrastive_grad_norm = torch_utils.clip_grad_norm_(
         self._dqn.parameters(), self._max_grad_norm, norm_type=2)
 
-    self._grad_norms.append(grad_norm)
+    self._contrastive_grad_norms.append(contrastive_grad_norm)
     self._optimizer.step()
+
+    # Reset to require grad
+    for param in self._dqn._Q.parameters():
+      param.requires_grad = True
+    for param in self._dqn._target_Q.parameters():
+      param.requires_grad = True
 
   def update(self, experience):
     """Updates agent on this experience.
@@ -112,6 +142,7 @@ class DQNAgent(object):
     stats["loss"] = mean_with_default(self._losses, None)
     stats["contrastive_loss"] = mean_with_default(self._contrastive_losses, None)
     stats["grad_norm"] = mean_with_default(self._grad_norms, None)
+    stats["contrastive_grad_norm"] = mean_with_default(self._contrastive_grad_norms, None)
     return {"DQN/{}".format(k): v for k, v in stats.items()}
 
   def state_dict(self):

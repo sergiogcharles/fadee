@@ -96,7 +96,9 @@ def get_env_class(environment_type):
     return cooking.CookingGridEnv
   elif environment_type == "updated":
     # return updated.UpdatedGridEnv
-    return updated.CityGridEnv
+    return updated.MapGridEnv
+  elif environment_type == "large":
+    return updated.LargeCityGridEnv
   elif environment_type == "miniworld_sign":
     # Dependencies on OpenGL, so only load if absolutely necessary
     from envs.miniworld import sign
@@ -284,7 +286,8 @@ def main():
       contrastive_loss = -torch.log(torch.softmax(S, dim=0)[0])
 
     if contrastive_loss:
-      instruction_agent.update_contrastive(contrastive_loss)
+      contrastive_loss_weight = 10.0
+      instruction_agent.update_contrastive(contrastive_loss_weight * contrastive_loss)
       
     # Update DQN
     # Needed to keep references to the trajectory and index for reward labeling
