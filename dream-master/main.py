@@ -164,6 +164,8 @@ def main():
       help="Overwrites experiment under this experiment name, if it exists.")
   arg_parser.add_argument(
       "-s", "--seed", default=0, help="random seed to use.", type=int)
+  arg_parser.add_argument(
+      "-t", "--temperature", default=1.0, help="temperature to use for contrastive loss.", type=float)
   arg_parser.add_argument("exp_name", help="name of the experiment to run")
   args = arg_parser.parse_args()
   config = cfg.Config.from_files_and_bindings(
@@ -283,7 +285,8 @@ def main():
       X_norm = torch.norm(X, dim=1, p=2).reshape(-1, 1)
       X = X / X_norm
       S = torch.sum(X * embedding, dim=1)
-      contrastive_loss = -torch.log(torch.softmax(S, dim=0)[0])
+      temperature = args.temperature
+      contrastive_loss = -torch.log(torch.softmax(S / temperature, dim=0)[0])
 
     if contrastive_loss:
       contrastive_loss_weight = 10.0

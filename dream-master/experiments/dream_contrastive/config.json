@@ -1,5 +1,5 @@
 {
-    "environment": "updated",
+    "environment": "large",
     "exploration_agent": {
         "batch_size": 32,
         "buffer": {
