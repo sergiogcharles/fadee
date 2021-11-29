@@ -198,6 +198,9 @@ class TrajectoryEmbedder(Embedder, relabel.RewardLabeler):
         (torch.ones(transition_contexts.shape[0], 1).bool(), mask), -1)
     return id_contexts, all_transition_contexts, transition_contexts, mask
 
+
+    
+
   # def _compute_contexts(self, trajectories):
   #   """Returns contexts and masks.
 

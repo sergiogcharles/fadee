@@ -52,7 +52,7 @@ class DQNAgent(object):
     self._grad_norms = collections.deque(maxlen=100)
 
   def update_contrastive(self, loss):
-    loss.backward(retain_graph=True)
+    loss.backward()
     self._contrastive_losses.append(loss.item())
     # clip according to the max allowed grad norm
     grad_norm = torch_utils.clip_grad_norm_(
@@ -60,11 +60,6 @@ class DQNAgent(object):
 
     self._grad_norms.append(grad_norm)
     self._optimizer.step()
-
-    if self._updates % self._sync_freq == 0:
-      self._dqn.sync_target()
-
-    self._updates += 1
 
   def update(self, experience):
     """Updates agent on this experience.
@@ -115,6 +110,7 @@ class DQNAgent(object):
 
     stats = self._dqn.stats
     stats["loss"] = mean_with_default(self._losses, None)
+    stats["contrastive_loss"] = mean_with_default(self._contrastive_losses, None)
     stats["grad_norm"] = mean_with_default(self._grad_norms, None)
     return {"DQN/{}".format(k): v for k, v in stats.items()}
 
@@ -397,7 +393,7 @@ class RecurrentDQNPolicy(DQNPolicy):
       if isinstance(aux_losses, dict):
         for name, loss in aux_losses.items():
           self._losses[name].append(loss.detach().cpu().data.numpy())
-
+        
     # DDQN
     next_q_values = q_values[:, 1:, :]
     # (batch_size * seq_len, actions)
@@ -415,6 +411,7 @@ class RecurrentDQNPolicy(DQNPolicy):
     weights = weights.unsqueeze(1) * mask.float()
     loss = (td_error ** 2).reshape(batch_size, seq_len) * weights
     loss = loss.sum() / mask.sum()  # masked mean
+   
     return loss + sum(aux_losses.values())
 
   def act(self, state, prev_hidden_state=None, test=False):

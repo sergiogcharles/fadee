@@ -244,50 +244,24 @@ def main():
             exploration_env, [], seed=max(0, step - 1)),
         exploration_agent)
 
-    
-    # Needed to keep references to the trajectory and index for reward labeling
-    for index, exp in enumerate(exploration_episode):
-      exploration_agent.update(
-          relabel.TrajectoryExperience(exp, exploration_episode, index))
+    embedding, _ = trajectory_embedder([exploration_episode])
+    min_contrastive_steps = 0
 
-    min_contrastive_steps = 10000
-    num_positive_samples = 5
-    num_negative_samples = 5
-
-    if step >= min_contrastive_steps:
-      positive_samples = []
-      negative_samples = []
-
-      positive_contrastive_loss = []
-
-      # Positive examples for contrastive trajectory embedding method
-      for i in range(num_positive_samples):
-        index = np.random.randint(len(hidden_state_buffer))
-        sampled_hidden_state = hidden_state_buffer[index]
-        positive_samples.append(sampled_hidden_state)
-
-        # Random starting state
-        exploration_env = create_env(step, random_start=True)
-        augmented_episode, _, hidden_state_buffer_augmented = run_episode(
-            # Exploration episode gets ignored
-            env_class.instruction_wrapper()(
-                exploration_env, [], seed=max(0, step - 1)),
-            exploration_agent, initial_hidden_state=sampled_hidden_state)
-        
-        _, losses = trajectory_embedder([augmented_episode])
-        positive_contrastive_loss.append(losses["transition_context_loss"])
+    contrastive_loss = None
+    if step >= min_contrastive_steps:    
+      # Random starting state
+      exploration_env = create_env(step, random_start=True)
+      augmented_episode, _, hidden_state_buffer_augmented = run_episode(
+          # Exploration episode gets ignored
+          env_class.instruction_wrapper()(
+              exploration_env, [], seed=max(0, step - 1)),
+          exploration_agent, initial_hidden_state=None)
       
-      positive_contrastive_loss = torch.stack(positive_contrastive_loss)
-      positive_contrastive_loss = positive_contrastive_loss.mean(0)
-      instruction_agent.update_contrastive(positive_contrastive_loss)
+      positive_augmented_embedding, _ = trajectory_embedder([augmented_episode])
 
-      negative_contrastive_loss = []
-      # Negative examples
+      num_negative_samples = 20
+      negative_augmented_embeddings = []
       for i in range(num_negative_samples):
-        index = np.random.randint(len(hidden_state_buffer))
-        sampled_hidden_state = hidden_state_buffer[index]
-        negative_samples.append(sampled_hidden_state)
-
         # Random starting state
         # Get different environment at each sample
         exploration_env = create_env(int(step * num_negative_samples + 1e6 + i), random_start=True)
@@ -295,14 +269,28 @@ def main():
             # Exploration episode gets ignored
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, step - 1)),
-            exploration_agent, initial_hidden_state=sampled_hidden_state)
+            exploration_agent, initial_hidden_state=None)
         
-        _, losses = trajectory_embedder([augmented_episode])
-        negative_contrastive_loss.append(losses["transition_context_loss"])
+        negative_augmented_embedding, _ = trajectory_embedder([augmented_episode])
+        negative_augmented_embeddings.append(negative_augmented_embedding.reshape(-1))
+      
+      negative_augmented_embeddings = torch.stack(negative_augmented_embeddings)
 
-      negative_contrastive_loss = torch.stack(negative_contrastive_loss)
-      negative_contrastive_loss = negative_contrastive_loss.mean(0)
-      instruction_agent.update_contrastive(positive_contrastive_loss - negative_contrastive_loss)
+      # Compute SimCLR loss
+      X = torch.cat((positive_augmented_embedding, negative_augmented_embeddings), dim=0)
+      X_norm = torch.norm(X, dim=1, p=2).reshape(-1, 1)
+      X = X / X_norm
+      S = torch.sum(X * embedding, dim=1)
+      contrastive_loss = -torch.log(torch.softmax(S, dim=0)[0])
+
+    if contrastive_loss:
+      instruction_agent.update_contrastive(contrastive_loss)
+      
+    # Update DQN
+    # Needed to keep references to the trajectory and index for reward labeling
+    for index, exp in enumerate(exploration_episode):
+      exploration_agent.update(
+          relabel.TrajectoryExperience(exp, exploration_episode, index))
 
     exploration_steps += len(exploration_episode)
     exploration_lengths.append(len(exploration_episode))
