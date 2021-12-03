@@ -17,11 +17,12 @@ class DQNAgent(object):
     dqn = DQNPolicy.from_config(config.get("policy"), env)
     replay_buffer = replay.ReplayBuffer.from_config(config.get("buffer"))
     optimizer = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
-    return cls(dqn, replay_buffer, optimizer, config.get("sync_target_freq"),
+    contrastive_optimizer = optim.Adam(dqn.parameters(), lr=config.get("learning_rate"))
+    return cls(dqn, replay_buffer, optimizer, contrastive_optimizer, config.get("sync_target_freq"),
                config.get("min_buffer_size"), config.get("batch_size"),
                config.get("update_freq"), config.get("max_grad_norm"))
 
-  def __init__(self, dqn, replay_buffer, optimizer, sync_freq,
+  def __init__(self, dqn, replay_buffer, optimizer, contrastive_optimizer, sync_freq,
                min_buffer_size, batch_size, update_freq, max_grad_norm):
     """
     Args:
@@ -40,6 +41,7 @@ class DQNAgent(object):
     self._dqn = dqn
     self._replay_buffer = replay_buffer
     self._optimizer = optimizer
+    self._contrastive_optimizer = contrastive_optimizer
     self._sync_freq = sync_freq
     self._min_buffer_size = min_buffer_size
     self._batch_size = batch_size
@@ -53,6 +55,7 @@ class DQNAgent(object):
     self._contrastive_grad_norms = collections.deque(maxlen=100)
 
   def update_contrastive(self, loss):
+    self._contrastive_optimizer.zero_grad()
     loss.backward()
     self._contrastive_losses.append(loss.item())
     # clip according to the max allowed grad norm
@@ -74,16 +77,16 @@ class DQNAgent(object):
       param.requires_grad = False
     
     # Turn on state embedder params (since we just indirectly turned them off)
-    for param in self._dqn._Q._state_embedder.parameters():
+    for param in self._dqn._Q._state_embedder._trajectory_embedder.parameters():
       param.requires_grad = True
-    for param in self._dqn._target_Q._state_embedder.parameters():
+    for param in self._dqn._target_Q._state_embedder._trajectory_embedder.parameters():
       param.requires_grad = True
     
     contrastive_grad_norm = torch_utils.clip_grad_norm_(
         self._dqn.parameters(), self._max_grad_norm, norm_type=2)
 
     self._contrastive_grad_norms.append(contrastive_grad_norm)
-    self._optimizer.step()
+    self._contrastive_optimizer.step()
 
     # Reset to require grad
     for param in self._dqn._Q.parameters():

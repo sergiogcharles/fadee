@@ -17,11 +17,11 @@ class InstructionWrapper(meta_exploration.InstructionWrapper):
             R(s, a) = -0.3 if s != goal
                     = 1      otherwise
     """
-    # GOALS = [np.array((0, 0)), np.array((4, 4)),
-    #          np.array((0, 4)), np.array((4, 0))]
-    GOALS = [np.array((0, 0)), np.array((8, 8)),
-             np.array((0, 8)), np.array((8, 0)), 
-             np.array((4, 0)), np.array((4, 8))]
+    GOALS = [np.array((0, 0)), np.array((4, 4)),
+             np.array((0, 4)), np.array((4, 0))]
+    # GOALS = [np.array((0, 0)), np.array((8, 8)),
+    #          np.array((0, 8)), np.array((8, 0)), 
+    #          np.array((4, 0)), np.array((4, 8))]
 
     def _instruction_observation_space(self):
         return gym.spaces.Box(
@@ -431,3 +431,4 @@ class LargeCityGridEnv(grid.GridEnv):
         for (bus_stop, color), dest in zip(self._bus_sources, destinations):
             self.place(grid.Bus(color, dest), bus_stop)
             self.place(grid.Bus(color, bus_stop), dest)
+            

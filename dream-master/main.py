@@ -18,6 +18,7 @@ import policy
 import relabel
 import rl
 import utils
+import pickle
 
 
 def run_episode(env, policy, experience_observers=None, test=False, initial_hidden_state=None):
@@ -249,19 +250,21 @@ def main():
         exploration_agent)
 
     embedding, _ = trajectory_embedder([exploration_episode])
-    min_contrastive_steps = 0
 
+    min_contrastive_steps = 2000
     contrastive_loss = None
-    if step >= min_contrastive_steps:    
+    
+    if step >= min_contrastive_steps and step % 2 == 0:  
+      trajectory_embedder.use_ids(False)  
       # Random starting state
       exploration_env = create_env(step, random_start=True)
-      augmented_episode, _, hidden_state_buffer_augmented = run_episode(
+      augmented_positive_episode, _, hidden_state_buffer_augmented = run_episode(
           # Exploration episode gets ignored
           env_class.instruction_wrapper()(
               exploration_env, [], seed=max(0, step - 1)),
           exploration_agent, initial_hidden_state=None)
       
-      positive_augmented_embedding, _ = trajectory_embedder([augmented_episode])
+      positive_augmented_embedding, _ = trajectory_embedder([augmented_positive_episode])
 
       num_negative_samples = 20
       negative_augmented_embeddings = []
@@ -269,13 +272,13 @@ def main():
         # Random starting state
         # Get different environment at each sample
         exploration_env = create_env(int(step * num_negative_samples + 1e6 + i), random_start=True)
-        augmented_episode, _, hidden_state_buffer_augmented = run_episode(
+        augmented_negative_episode, _, hidden_state_buffer_augmented = run_episode(
             # Exploration episode gets ignored
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, step - 1)),
             exploration_agent, initial_hidden_state=None)
         
-        negative_augmented_embedding, _ = trajectory_embedder([augmented_episode])
+        negative_augmented_embedding, _ = trajectory_embedder([augmented_negative_episode])
         negative_augmented_embeddings.append(negative_augmented_embedding.reshape(-1))
       
       negative_augmented_embeddings = torch.stack(negative_augmented_embeddings)
@@ -285,9 +288,12 @@ def main():
       X_norm = torch.norm(X, dim=1, p=2).reshape(-1, 1)
       X = X / X_norm
       S = torch.sum(X * embedding, dim=1)
+      # S = 1 / (((X - embedding) ** 2).sum(dim=1))
+      if step % 1000 == 0:
+        print(S)
       temperature = args.temperature
       contrastive_loss = -torch.log(torch.softmax(S / temperature, dim=0)[0])
-
+      trajectory_embedder.use_ids(True)
     if contrastive_loss:
       contrastive_loss_weight = 10.0
       instruction_agent.update_contrastive(contrastive_loss_weight * contrastive_loss)
@@ -362,6 +368,33 @@ def main():
       test_rewards = []
       test_exploration_lengths = []
       trajectory_embedder.use_ids(False)
+      embeddings_dir = os.path.join(exp_dir, "embeddings", str(step))
+      os.makedirs(embeddings_dir, exist_ok=True)
+      env_embeddings = {}
+      env_traj_embeddings = {}
+      for test_index in tqdm.tqdm(range(1000)):
+        exploration_env = create_env(test_index, test=True)
+        exploration_episode, exploration_render, hidden = run_episode(
+            env_class.instruction_wrapper()(
+                exploration_env, [], seed=max(0, test_index - 1), test=True),
+            exploration_agent, test=True)
+        test_exploration_lengths.append(len(exploration_episode))
+
+        curr = env_embeddings.get(exploration_env._env_id[0], [])
+        curr.append(hidden)
+        env_embeddings[exploration_env._env_id[0]] = curr
+
+        curr = env_traj_embeddings.get(exploration_env._env_id[0], [])
+        curr.append(trajectory_embedder([exploration_episode]))
+        env_traj_embeddings[exploration_env._env_id[0]] = curr
+
+        instruction_env = env_class.instruction_wrapper()(
+            exploration_env, exploration_episode, seed=test_index + 1, test=True)
+        episode, render, _ = run_episode(
+            instruction_env, instruction_agent, test=True)
+      pickle.dump(env_embeddings, open(os.path.join(embeddings_dir, "env_embeddings.pickle"), "wb"))
+      pickle.dump(env_traj_embeddings, open(os.path.join(embeddings_dir, "env_traj_embeddings.pickle"), "wb"))
+
       for test_index in tqdm.tqdm(range(100)):
         exploration_env = create_env(test_index, test=True)
         exploration_episode, exploration_render, _ = run_episode(
