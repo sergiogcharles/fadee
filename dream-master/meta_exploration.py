@@ -33,7 +33,7 @@ class MetaExplorationEnv(abc.ABC, gym.Env):
     self._wrapper = wrapper
 
   @classmethod
-  def create_env(cls, seed, test=False, wrapper=None, random_start=False):
+  def create_env(cls, seed, test=False, wrapper=None, random_start=False, semi_sup=False, sup=False):
     """Randomly creates an environment instance.
 
     Args:
@@ -49,13 +49,25 @@ class MetaExplorationEnv(abc.ABC, gym.Env):
     """
     if wrapper is None:
       wrapper = lambda state: torch.tensor(state)
-
+    
     random = np.random.RandomState(seed)
-    train_ids, test_ids = cls.env_ids()
-    split = test_ids if test else train_ids
-    env_id = split[random.randint(len(split))]
-    return cls(env_id, wrapper, random_start=random_start)
-
+    if not semi_sup:
+      train_ids, test_ids = cls.env_ids()
+      train_ids = np.concatenate((train_ids[0], train_ids[1]), axis=0)
+      split = test_ids if test else train_ids
+      env_id = split[random.randint(len(split))]
+      return cls(env_id, wrapper, random_start=random_start)
+    else:
+      train_ids, test_ids = cls.env_ids()
+      if test:
+        env_id = test_ids[random.randint(len(test_ids))]
+      else:
+        sup_ids, unsup_ids = train_ids
+        unsup_ids = np.concatenate((unsup_ids, sup_ids), axis=0)
+        split = sup_ids if sup else unsup_ids
+        env_id = split[random.randint(len(split))]
+      return cls(env_id, wrapper, random_start=random_start)
+          
   @abc.abstractmethod
   def env_ids(cls):
     """Returns the list of valid task IDs split into train / test.

@@ -3,6 +3,7 @@ import itertools
 
 import gym
 import numpy as np
+import random
 
 from envs import grid
 import meta_exploration
@@ -101,6 +102,7 @@ class CityGridEnv(grid.GridEnv):
         super().__init__(env_id, wrapper, max_steps=max_steps,
                          width=self._width, height=self._height)
         self._random_start = random_start
+        random.shuffle(self._bus_permutations)
 
     @classmethod
     def instruction_wrapper(cls):
@@ -115,7 +117,9 @@ class CityGridEnv(grid.GridEnv):
     @classmethod
     def env_ids(cls):
         ids = np.expand_dims(np.array(range(len(cls._bus_permutations))), 1)
-        return np.array(ids), np.array(ids)
+        sup_ids = ids[:8]
+        unsup_ids = ids[8:]
+        return (np.array(sup_ids), np.array(unsup_ids)), np.array(ids)
 
     def text_description(self):
         return "bus grid"

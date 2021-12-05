@@ -242,7 +242,12 @@ def main():
   exploration_steps = 0
   instruction_steps = 0
   for step in tqdm.tqdm(range(1000000)):
-    exploration_env = create_env(step)
+    #exploration_env = create_env(step)
+    if step % 2 == 0:
+      # No ids used 
+      exploration_env = create_env(step, semi_sup=True, sup=False)
+    else:
+      exploration_env = create_env(step, semi_sup=True, sup=True)
     exploration_episode, _, hidden_state_buffer = run_episode(
         # Exploration episode gets ignored
         env_class.instruction_wrapper()(
@@ -251,13 +256,18 @@ def main():
 
     embedding, _ = trajectory_embedder([exploration_episode])
 
-    min_contrastive_steps = 2000
+    min_contrastive_steps = -1
     contrastive_loss = None
-    
-    if step >= min_contrastive_steps and step % 2 == 0:  
+
+    # Contrastive loss
+    if step >= min_contrastive_steps:  
       trajectory_embedder.use_ids(False)  
       # Random starting state
-      exploration_env = create_env(step, random_start=True)
+      if step % 2 == 0:
+        exploration_env = create_env(step, random_start=True, semi_sup=True, sup=False)
+      else:
+        exploration_env = create_env(step, random_start=True, semi_sup=True, sup=True)
+      
       augmented_positive_episode, _, hidden_state_buffer_augmented = run_episode(
           # Exploration episode gets ignored
           env_class.instruction_wrapper()(
@@ -271,7 +281,7 @@ def main():
       for i in range(num_negative_samples):
         # Random starting state
         # Get different environment at each sample
-        exploration_env = create_env(int(step * num_negative_samples + 1e6 + i), random_start=True)
+        exploration_env = create_env(int(step * num_negative_samples + 1e6 + i), random_start=True, semi_sup=True, sup=False)
         augmented_negative_episode, _, hidden_state_buffer_augmented = run_episode(
             # Exploration episode gets ignored
             env_class.instruction_wrapper()(
@@ -300,9 +310,10 @@ def main():
       
     # Update DQN
     # Needed to keep references to the trajectory and index for reward labeling
-    for index, exp in enumerate(exploration_episode):
-      exploration_agent.update(
-          relabel.TrajectoryExperience(exp, exploration_episode, index))
+    if step % 2 == 1:
+      for index, exp in enumerate(exploration_episode):
+        exploration_agent.update(
+            relabel.TrajectoryExperience(exp, exploration_episode, index))
 
     exploration_steps += len(exploration_episode)
     exploration_lengths.append(len(exploration_episode))
@@ -318,19 +329,19 @@ def main():
         experience_observers=[instruction_agent.update])
     instruction_steps += len(episode)
     trajectory_embedder.use_ids(True)
-
     rewards.append(sum(exp.reward for exp in episode))
 
-    # Log reward for exploration agent
-    exploration_rewards, distances = trajectory_embedder.label_rewards(
-        [exploration_episode])
-    exploration_rewards = exploration_rewards[0]
-    distances = distances[0]
-    relabel_rewards.append(exploration_rewards.sum().item())
+    if step % 2 == 1:
+      # Log reward for exploration agent
+      exploration_rewards, distances = trajectory_embedder.label_rewards(
+          [exploration_episode])
+      exploration_rewards = exploration_rewards[0]
+      distances = distances[0]
+      relabel_rewards.append(exploration_rewards.sum().item())
 
-    if step % 100 == 0:
-      path = os.path.join(text_dir, "{}.txt".format(step))
-      log_episode(exploration_episode, exploration_rewards, distances, path)
+      if step % 100 == 0:
+        path = os.path.join(text_dir, "{}.txt".format(step))
+        log_episode(exploration_episode, exploration_rewards, distances, path)
 
     if step % 100 == 0:
       for k, v in instruction_agent.stats.items():
@@ -409,16 +420,23 @@ def main():
             instruction_env, instruction_agent, test=True)
         test_rewards.append(sum(exp.reward for exp in episode))
 
+         # Determine if task is supervised or unsupervised
+        train_ids, test_ids = exploration_env.env_ids()
+        sup_ids, unsup_ids = train_ids
+        env_id = exploration_episode[0].state.env_id[0]
+        sup_unsup = env_id in sup_ids
+        sup_unsup_str = "supervised" if sup_unsup else "unsupervised"
+
         if test_index < 10:
           frames = [frame.image() for frame in render]
           save_path = os.path.join(
-              visualize_dir, "{}-instruction.gif".format(test_index))
+              visualize_dir, "{}-instruction-{}.gif".format(test_index, sup_unsup_str))
           frames[0].save(save_path, save_all=True, append_images=frames[1:],
                          duration=750, loop=0, optimize=True, quality=20)
 
           frames = [frame.image() for frame in exploration_render]
           save_path = os.path.join(
-              visualize_dir, "{}-exploration.gif".format(test_index))
+              visualize_dir, "{}-exploration-{}.gif".format(test_index, sup_unsup_str))
           frames[0].save(save_path, save_all=True, append_images=frames[1:],
                          duration=750, loop=0, optimize=True, quality=20)
 
@@ -442,6 +460,13 @@ def main():
                 exploration_env, [], seed=max(0, train_index - 1)),
             exploration_agent, test=True)
 
+        # Determine if task is supervised or unsupervised
+        train_ids, test_ids = exploration_env.env_ids()
+        sup_ids, unsup_ids = train_ids
+        env_id = exploration_episode[0].state.env_id[0]
+        sup_unsup = env_id in sup_ids
+        sup_unsup_str = "supervised" if sup_unsup else "unsupervised"
+
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=train_index + 1)
         episode, render, _ = run_episode(
@@ -449,13 +474,13 @@ def main():
 
         frames = [frame.image() for frame in render]
         save_path = os.path.join(
-            visualize_dir, "{}-instruction.gif".format(train_index))
+            visualize_dir, "{}-instruction-{}.gif".format(train_index, sup_unsup_str))
         frames[0].save(save_path, save_all=True, append_images=frames[1:],
                        duration=750, loop=0)
 
         frames = [frame.image() for frame in exploration_render]
         save_path = os.path.join(
-            visualize_dir, "{}-exploration.gif".format(train_index))
+            visualize_dir, "{}-exploration-{}.gif".format(train_index, sup_unsup_str))
         frames[0].save(save_path, save_all=True, append_images=frames[1:],
                        duration=750, loop=0)
       trajectory_embedder.use_ids(True)
