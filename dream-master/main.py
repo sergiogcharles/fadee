@@ -243,7 +243,7 @@ def main():
   instruction_steps = 0
   for step in tqdm.tqdm(range(1000000)):
     #exploration_env = create_env(step)
-    if step % 2 == 0:
+    if step % 2 == 0 and step > 30000:
       # No ids used 
       exploration_env = create_env(step, semi_sup=True, sup=False)
     else:
@@ -260,7 +260,7 @@ def main():
     contrastive_loss = None
 
     # Contrastive loss
-    if step >= min_contrastive_steps:  
+    if step > 30000:
       trajectory_embedder.use_ids(False)  
       # Random starting state
       if step % 2 == 0:
@@ -310,7 +310,7 @@ def main():
       
     # Update DQN
     # Needed to keep references to the trajectory and index for reward labeling
-    if step % 2 == 1:
+    if step % 2 == 1 or step <= 30000:
       for index, exp in enumerate(exploration_episode):
         exploration_agent.update(
             relabel.TrajectoryExperience(exp, exploration_episode, index))
@@ -331,7 +331,7 @@ def main():
     trajectory_embedder.use_ids(True)
     rewards.append(sum(exp.reward for exp in episode))
 
-    if step % 2 == 1:
+    if (step <= 30000) or (step % 2 == 1):
       # Log reward for exploration agent
       exploration_rewards, distances = trajectory_embedder.label_rewards(
           [exploration_episode])
@@ -384,7 +384,7 @@ def main():
       env_embeddings = {}
       env_traj_embeddings = {}
       for test_index in tqdm.tqdm(range(1000)):
-        exploration_env = create_env(test_index, test=True)
+        exploration_env = create_env(test_index, test=True, random_start=True)
         exploration_episode, exploration_render, hidden = run_episode(
             env_class.instruction_wrapper()(
                 exploration_env, [], seed=max(0, test_index - 1), test=True),
