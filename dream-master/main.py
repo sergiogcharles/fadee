@@ -94,6 +94,8 @@ def get_env_class(environment_type):
     return cooking.CookingGridEnv
   elif environment_type == "updated":
     return updated.UpdatedGridEnv
+  elif environment_type == "updatedHard":
+    return updated.UpdatedThreeGridEnv
   elif environment_type == "miniworld_sign":
     # Dependencies on OpenGL, so only load if absolutely necessary
     from envs.miniworld import sign
@@ -315,6 +317,7 @@ def main():
       os.makedirs(emebeddings_dir, exist_ok=True)
 
       env_embeddings = {}
+      env_traj_embeddings = {}
       for test_index in tqdm.tqdm(range(1000)):
         exploration_env = create_env(test_index, test=True)
         exploration_episode, exploration_render, hidden = run_episode(
@@ -322,14 +325,21 @@ def main():
                 exploration_env, [], seed=max(0, test_index - 1), test=True),
             exploration_agent, test=True)
         test_exploration_lengths.append(len(exploration_episode))
+
         curr = env_embeddings.get(exploration_env._env_id[0], [])
         curr.append(hidden)
         env_embeddings[exploration_env._env_id[0]] = curr
+
+        curr = env_traj_embeddings.get(exploration_env._env_id[0], [])
+        curr.append(trajectory_embedder([exploration_episode]))
+        env_traj_embeddings[exploration_env._env_id[0]] = curr
+
         instruction_env = env_class.instruction_wrapper()(
             exploration_env, exploration_episode, seed=test_index + 1, test=True)
         episode, render, _ = run_episode(
             instruction_env, instruction_agent, test=True)
-      pickle.dump(env_embeddings, open(os.path.join(emebeddings_dir, "env_embeddings.pickle"), "wb"))
+      pickle.dump(env_embeddings, open(os.path.join(emebeddings_dir, "env_embeddings.pickle"), "wb")) 
+      pickle.dump(env_traj_embeddings, open(os.path.join(emebeddings_dir, "env_traj_embeddings.pickle"), "wb"))
 
       for test_index in tqdm.tqdm(range(100)):
         exploration_env = create_env(test_index, test=True)
